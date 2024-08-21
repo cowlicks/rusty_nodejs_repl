@@ -5,7 +5,7 @@ use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
 use async_process::{ChildStdout, Stdio};
 use tempfile::TempDir;
 
-pub static REPL_JS: &str = include_str!("./js/utils.js");
+pub static REPL_JS: &str = include_str!("./repl.js");
 
 // TODO randomize EOF for each call to repl
 static DEFAULT_EOF: &[u8] = &[0, 1, 0];
