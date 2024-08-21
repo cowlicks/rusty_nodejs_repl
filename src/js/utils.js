@@ -1,5 +1,3 @@
-const log = (x) => [console.log(x), x][1]
-
 function Deferred() {
   const o = {};
   const p = new Promise((resolve, reject) => Object.assign(o, { resolve, reject }));
@@ -42,14 +40,11 @@ class AsyncQueue {
     return this._waiter;
   }
 
-  get size() {
-    return this._queue.length;
-  }
-
   _addFunc(x, func) {
     if (this._done) {
       throw new Error('Cannot push on a done queue');
     }
+    // if someones waiting, give them x
     if (this._waiter) {
       this._waiter.resolve(_box(x));
       this._waiter = null;
@@ -61,13 +56,6 @@ class AsyncQueue {
   push(...stuff) {
     stuff.forEach((x) => {
       this._addFunc(x, (y) => this._queue.push(y));
-    });
-    return this;
-  }
-
-  unshift(...stuff) {
-    stuff.forEach((x) => {
-      this._addFunc(x, (y) => this._queue.unshift(y));
     });
     return this;
   }
@@ -109,9 +97,6 @@ async function repl() {
 
 }
 
-
-Object.assign(module.exports, {
-  repl,
-  AsyncQueue,
-  Deferred,
-});
+(async () => {
+  await repl();
+})();
