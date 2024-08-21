@@ -1,105 +1,55 @@
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
-use std::{fs::File, io::Write, path::PathBuf, process::Command, string::FromUtf8Error};
+use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
 
 use async_process::{ChildStdout, Stdio};
 use tempfile::TempDir;
 
-pub static _PATH_TO_DATA_DIR: &str = "src/js/data";
-pub static LOOPBACK: &str = "127.0.0.1";
-pub static REL_PATH_TO_NODE_MODULES: &str = "./js/node_modules";
-pub static REL_PATH_TO_JS_DIR: &str = "./src/js";
+pub static REPL_JS: &str = include_str!("./js/utils.js");
 
+// TODO randomize EOF for each call to repl
 static DEFAULT_EOF: &[u8] = &[0, 1, 0];
 static SCRIPT_FILE_NAME: &str = "script.js";
-pub static RUN_REPL_CODE: &str = r#"
-const { repl } = require('./utils.js');
-// start a read-eval-print-loop we use from rust
-await repl();
-"#;
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("Problem in tests: {0}")]
-    TestError(String),
-    #[error("IoError")]
-    IoError(#[from] std::io::Error),
-    #[error("Ut8Error")]
-    Utf8Error(#[from] FromUtf8Error),
-    #[error("serde_json::Error")]
-    SerdeJsonError(#[from] serde_json::Error),
-}
-pub type Result<T> = core::result::Result<T, Error>;
+static DEFAULT_NODE_BINARY: &str = "node";
 
-macro_rules! join_paths {
-    ( $path:expr$(,)?) => {
-        $path
-    };
-    ( $p1:expr,  $p2:expr) => {{
-        let p = std::path::Path::new(&*$p1).join($p2);
-        p.display().to_string()
-    }};
-    ( $p1:expr,  $p2:expr, $($tail:tt)+) => {{
-        let p = std::path::Path::new($p1).join($p2);
-        join_paths!(p.display().to_string(), $($tail)*)
-    }};
-}
-pub(crate) use join_paths;
-
-pub fn git_root() -> Result<String> {
-    let x = Command::new("sh")
-        .arg("-c")
-        .arg("git rev-parse --show-toplevel")
-        .output()?;
-    Ok(String::from_utf8(x.stdout)?.trim().to_string())
+#[derive(derive_builder::Builder, Default)]
+#[builder(default, pattern = "owned")]
+pub struct ReplConf {
+    /// define and run the repl
+    #[builder(default = "REPL_JS.to_string()")]
+    repl_code: String,
+    /// the name of the file within which the repl is run
+    #[builder(default = "SCRIPT_FILE_NAME.to_string()")]
+    script_file_name: String,
+    /// A function that constructs the shell script which runs the repl.
+    /// It is passed the directory the reply is run from, and the full path to the `script_file_name` file.
+    /// By default the function creates the command `/path/to/nodejs /path/to/repl_script.js`.
+    build_command: Option<Box<dyn Fn(&ReplConf, &str, &str) -> String>>,
+    /// a list paths that will be copied into the directory alongside the script.
+    copy_dirs: Vec<String>,
+    /// path to a node_modules directory which node will use
+    path_to_node_modules: Option<String>,
+    /// path to node binary
+    #[builder(default = "DEFAULT_NODE_BINARY.to_string()")]
+    node_binary: String,
+    #[builder(default = "DEFAULT_EOF.to_vec()")]
+    eof: Vec<u8>,
 }
 
-pub fn path_to_js_dir() -> Result<PathBuf> {
-    Ok(join_paths!(git_root()?, &REL_PATH_TO_JS_DIR).into())
-}
-
-pub fn path_to_node_modules() -> Result<PathBuf> {
-    let p = join_paths!(git_root()?, &REL_PATH_TO_NODE_MODULES);
-    Ok(p.into())
-}
-
-pub fn async_iiaf_template(async_body_str: &str) -> String {
-    format!(
-        "(async () => {{
-{}
-}})()",
-        async_body_str
-    )
-}
-
-fn build_command(_working_dir: &str, script_path: &str) -> String {
-    format!(
-        "NODE_PATH={} node {}",
-        path_to_node_modules().unwrap().display(),
-        script_path
-    )
-}
-#[derive(derive_builder::Builder)]
-#[builder(pattern = "owned")]
-pub struct JsContext2 {
-    /// needs to be held until the working directory should be dropped
-    #[builder(default = "self.set_dir_default()?")]
-    pub dir: TempDir,
-    pub stdin: async_process::ChildStdin,
-    pub stdout: Bytes<async_process::ChildStdout>,
-    pub child: async_process::Child,
-    pub eof: Vec<u8>,
-}
-impl JsContext2Builder {
-    fn set_dir_default(&self) -> std::result::Result<TempDir, String> {
-        match tempfile::tempdir() {
-            Ok(tmp) => Ok(tmp),
-            Err(e) => Err(format!("{e}")),
-        }
+impl ReplConf {
+    pub fn start(&self) -> Result<JsContext> {
+        let (dir, mut child) = run_code(&self)?;
+        Ok(JsContext {
+            dir,
+            stdin: child.stdin.take().unwrap(),
+            stdout: child.stdout.take().unwrap().bytes(),
+            child,
+            eof: self.eof.clone(),
+        })
     }
 }
 
-//#[derive(derive_builder::Builder)]
 pub struct JsContext {
     /// needs to be held until the working directory should be dropped
     pub dir: TempDir,
@@ -110,13 +60,6 @@ pub struct JsContext {
 }
 
 impl JsContext {
-    pub fn new() -> Result<Self> {
-        Ok(run_js(
-            &async_iiaf_template(RUN_REPL_CODE),
-            vec![format!("{}/utils.js", path_to_js_dir()?.to_string_lossy())],
-        )?)
-    }
-
     pub async fn repl(&mut self, code: &str) -> Result<Vec<u8>> {
         let code = [
             b";(async () =>{\n",
@@ -132,33 +75,26 @@ impl JsContext {
     }
 }
 
-pub fn run_js(code_string: &str, copy_dirs: Vec<String>) -> Result<JsContext> {
-    let (dir, mut child) = run_code(code_string, SCRIPT_FILE_NAME, build_command, copy_dirs)?;
-    Ok(JsContext {
-        dir,
-        stdin: child.stdin.take().unwrap(),
-        stdout: child.stdout.take().unwrap().bytes(),
-        child,
-        eof: DEFAULT_EOF.to_vec(),
-    })
+fn default_build_command(conf: &ReplConf, _working_dir: &str, path_to_script: &str) -> String {
+    let node_env = conf
+        .path_to_node_modules
+        .as_ref()
+        .map(|p| format!("NODE_ENV={p}"))
+        .unwrap_or(Default::default());
+
+    format!("{} {} {path_to_script}", node_env, conf.node_binary)
 }
 
-pub fn run_code(
-    code_string: &str,
-    script_file_name: &str,
-    build_command: impl FnOnce(&str, &str) -> String,
-    copy_dirs: Vec<String>,
-) -> Result<(TempDir, async_process::Child)> {
+fn run_code(conf: &ReplConf) -> Result<(TempDir, async_process::Child)> {
     let working_dir = tempfile::tempdir()?;
 
-    let script_path = working_dir.path().join(script_file_name);
+    let script_path = working_dir.path().join(&conf.script_file_name);
     let script_file = File::create(&script_path)?;
 
-    write!(&script_file, "{}", &code_string)?;
+    write!(&script_file, "{}", &conf.repl_code)?;
 
     let working_dir_path = working_dir.path().display().to_string();
-    // copy dirs into working dir
-    for dir in copy_dirs {
+    for dir in &conf.copy_dirs {
         let dir_cp_cmd = Command::new("cp")
             .arg("-r")
             .arg(&dir)
@@ -172,7 +108,15 @@ pub fn run_code(
         }
     }
     let script_path_str = script_path.display().to_string();
-    let cmd = build_command(&working_dir_path, &script_path_str);
+
+    let cmd = match &conf.build_command {
+        Some(func) => {
+            //let f = &func.as_ref();
+            func(&conf, &working_dir_path, &script_path_str)
+        }
+        None => default_build_command(conf, &working_dir_path, &script_path_str),
+    };
+    //let cmd = build_command(&working_dir_path, &script_path_str);
     Ok((
         working_dir,
         async_process::Command::new("sh")
@@ -185,7 +129,7 @@ pub fn run_code(
     ))
 }
 
-pub async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
+async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
     let mut buff = vec![];
     while let Some(Ok(b)) = stdout.next().await {
         buff.push(b);
@@ -197,12 +141,27 @@ pub async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]
     buff
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Problem in tests: {0}")]
+    TestError(String),
+    #[error("IoError")]
+    IoError(#[from] std::io::Error),
+    #[error("Ut8Error")]
+    Utf8Error(#[from] FromUtf8Error),
+    #[error("serde_json::Error")]
+    SerdeJsonError(#[from] serde_json::Error),
+    #[error("repl builder error")]
+    ReplConfBuilerError(#[from] ReplConfBuilderError),
+}
+type Result<T> = core::result::Result<T, Error>;
+
 #[cfg(test)]
 mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context = JsContext::new()?;
+        let mut context = ReplConfBuilder::default().build()?.start()?;
         let result = context.repl("process.stdout.write('fooo6!');").await?;
         assert_eq!(result, b"fooo6!");
         let result = context
@@ -210,11 +169,14 @@ mod test {
                 "
 a = 66;
 b = 7 + a;
+c = 77;
 process.stdout.write(`${b}`);
 ",
             )
             .await?;
         assert_eq!(result, b"73");
+        let result = context.repl("process.stdout.write(`${c}`)").await?;
+        assert_eq!(result, b"77");
 
         let _result = context.repl("queue.done();").await?;
         let _ = context.child.output().await?;
