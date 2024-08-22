@@ -7,6 +7,7 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 let mut context: Repl = Config::build()?.start()?;
 let result = context.repl("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
+context.stop().await?;
 # Ok::<(),Error>(())
 # }).unwrap();
 ```
@@ -19,13 +20,12 @@ use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
 use async_process::{ChildStdout, Stdio};
 use tempfile::TempDir;
 
-pub static REPL_JS: &str = include_str!("./repl.js");
+const REPL_JS: &str = include_str!("./repl.js");
+const SCRIPT_FILE_NAME: &str = "script.js";
+const DEFAULT_NODE_BINARY: &str = "node";
 
 // TODO randomize EOF for each call to repl
-static DEFAULT_EOF: &[u8] = &[0, 1, 0];
-static SCRIPT_FILE_NAME: &str = "script.js";
-
-static DEFAULT_NODE_BINARY: &str = "node";
+const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 
 #[derive(derive_builder::Builder, Default)]
 #[builder(default, pattern = "owned")]
