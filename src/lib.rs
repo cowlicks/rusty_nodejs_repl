@@ -54,20 +54,20 @@ const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 pub struct Config {
     /// JS imports
     pub imports: Vec<String>,
-    /// code that runs before the repl in an async context. setup, etc
+    /// code that runs before the REPL in an async context. setup, etc
     pub before: Vec<String>,
-    /// define and run the repl
+    /// define and run the REPL
     #[builder(default = "REPL_JS.to_string()")]
     pub repl_code: String,
-    /// code that runs after the repl. teardown, etc
+    /// code that runs after the REPL. teardown, etc
     /// run in revers order
     pub after: Vec<String>,
-    /// the name of the file within which the repl is run
+    /// the name of the file within which the REPL is run
     #[builder(default = "SCRIPT_FILE_NAME.to_string()")]
     script_file_name: String,
-    /// A function that constructs the shell script which runs the repl.
-    /// It is passed the directory the reply is run from, and the full path to the `script_file_name` file.
-    /// By default the function creates the command `/path/to/nodejs /path/to/repl_script.js`.
+    /// A function that constructs the shell script which runs the REPL.
+    /// It is passed the config, the directory the REPL is run from, and the full path to the `script_file_name` file.
+    /// Result looks like: `NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
     build_command: Option<Box<dyn Fn(&Config, &str, &str) -> String>>,
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
