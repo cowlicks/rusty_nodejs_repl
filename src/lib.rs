@@ -1,3 +1,17 @@
+/*!
+This crate lets you run arbitrary code in a  Node.js REPL from Rust.
+Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
+```rust
+# tokio_test::block_on(async {
+# use rusty_nodejs_repl::{Repl, Config, Error};
+let mut context: Repl = Config::build()?.start()?;
+let result = context.repl("console.log('Hello, world!');").await?;
+assert_eq!(result, b"Hello, world!\n");
+# Ok::<(),Error>(())
+# }).unwrap();
+```
+The REPL is run in it's own [`tempfile::TempDir`]. So anyfiles created alongside it will be cleaned up on exit.
+*/
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
 use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
@@ -55,7 +69,8 @@ pub struct Config {
     /// It is passed the directory the reply is run from, and the full path to the `script_file_name` file.
     /// By default the function creates the command `/path/to/nodejs /path/to/repl_script.js`.
     build_command: Option<Box<dyn Fn(&Config, &str, &str) -> String>>,
-    /// a list paths that will be copied into the directory alongside the script.
+    /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
+    /// Useful for importing custom code.
     copy_dirs: Vec<String>,
     /// path to a node_modules directory which node will use
     pub path_to_node_modules: Option<String>,
@@ -230,7 +245,7 @@ mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context = Config::build()?.start()?;
+        let mut context: Repl = Config::build()?.start()?;
         let result = context.repl("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
         let result = context
