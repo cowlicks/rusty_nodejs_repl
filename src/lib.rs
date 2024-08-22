@@ -30,10 +30,9 @@ const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 #[derive(derive_builder::Builder, Default)]
 #[builder(default, pattern = "owned")]
-/// Configure the REPL. Usually you will want to setup the REPL context by importing some modules
+/// Configurating for [`Repl`]. Usually you will want to setup the REPL context by importing some modules
 /// and doing some setup. Then maybe, run some teardown code after the REPL closes.
-/// This is done with the [`imports`], [`before`], and [`after`] fields. Give these fields strings
-/// of JavaScript which correspond to the appropriate parts.
+/// Do this by giving JavaScript strings to [`Config::imports`], [`Config::before`], and [`Config::after`] fields.
 ///
 /// The Node.js script will look something like:
 ///
@@ -41,7 +40,7 @@ type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 /// // eval Config::imports
 ///
 /// (async () => {
-///     // eval RepleConf::before
+///     // eval Config::before
 ///
 ///    for await (const line of repl()) {
 ///         eval(line)
@@ -72,7 +71,7 @@ pub struct Config {
     build_command: Option<Box<BuildCommand>>,
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
-    copy_dirs: Vec<String>,
+    pub copy_dirs: Vec<String>,
     /// path to a node_modules directory which node will use
     pub path_to_node_modules: Option<String>,
     /// path to node binary
@@ -183,6 +182,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     ))
 }
 
+/// Interface to the Node.js REPL. Send code with [`Repl::repl`], stop it with [`Repl::stop`].
 pub struct Repl {
     /// Needs to be held until the working directory should be dropped
     pub dir: TempDir,
@@ -237,7 +237,7 @@ pub enum Error {
     #[error("serde_json::Error")]
     SerdeJsonError(#[from] serde_json::Error),
     #[error("repl builder error")]
-    ReplConfBuilerError(#[from] ConfigBuilderError),
+    ConfigBuilderError(#[from] ConfigBuilderError),
 }
 type Result<T> = core::result::Result<T, Error>;
 
