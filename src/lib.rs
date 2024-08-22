@@ -27,6 +27,7 @@ const DEFAULT_NODE_BINARY: &str = "node";
 // TODO randomize EOF for each call to repl
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 
+type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 #[derive(derive_builder::Builder, Default)]
 #[builder(default, pattern = "owned")]
 /// Configure the REPL. Usually you will want to setup the REPL context by importing some modules
@@ -68,7 +69,7 @@ pub struct Config {
     /// A function that constructs the shell script which runs the REPL.
     /// It is passed the config, the directory the REPL is run from, and the full path to the `script_file_name` file.
     /// Result looks like: `NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
-    build_command: Option<Box<dyn Fn(&Config, &str, &str) -> String>>,
+    build_command: Option<Box<BuildCommand>>,
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
     copy_dirs: Vec<String>,
@@ -103,7 +104,7 @@ impl Config {
         Ok(ConfigBuilder::default().build()?)
     }
     pub fn start(&self) -> Result<Repl> {
-        let (dir, mut child) = run_code(&self)?;
+        let (dir, mut child) = run_code(self)?;
         Ok(Repl {
             dir,
             stdin: child.stdin.take().unwrap(),
@@ -137,7 +138,7 @@ fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str
         .path_to_node_modules
         .as_ref()
         .map(|p| format!("NODE_PATH={p}"))
-        .unwrap_or(Default::default());
+        .unwrap_or_default();
 
     format!("{} {} {path_to_script}", node_env, conf.node_binary)
 }
@@ -154,7 +155,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     for dir in &conf.copy_dirs {
         let dir_cp_cmd = Command::new("cp")
             .arg("-r")
-            .arg(&dir)
+            .arg(dir)
             .arg(&working_dir_path)
             .output()?;
         if dir_cp_cmd.status.code() != Some(0) {
@@ -167,7 +168,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     let script_path_str = script_path.display().to_string();
 
     let cmd = match &conf.build_command {
-        Some(func) => func(&conf, &working_dir_path, &script_path_str),
+        Some(func) => func(conf, &working_dir_path, &script_path_str),
         None => default_build_command(conf, &working_dir_path, &script_path_str),
     };
     Ok((
