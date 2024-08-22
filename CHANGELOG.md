@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+
+
+## [0.1.1] - 2024-08-22
+
+### Added
+
 - Added some metadata for docs.rs
 
 ### Changed
@@ -19,4 +29,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.0...v0.1.1
