@@ -1,7 +1,7 @@
 # Rusty Node.js REPL 🦀 🌳 🌀
 
 ```
-$ cargo add rusty_node_repl
+$ cargo add rusty_nodejs_repl
 ```
 
 ## Usage
