@@ -15,8 +15,30 @@ static DEFAULT_NODE_BINARY: &str = "node";
 
 #[derive(derive_builder::Builder, Default)]
 #[builder(default, pattern = "owned")]
-pub struct ReplConf {
-    /// imports
+/// Configure the REPL. Usually you will want to setup the REPL context by importing some modules
+/// and doing some setup. Then maybe, run some teardown code after the REPL closes.
+/// This is done with the [`imports`], [`before`], and [`after`] fields. Give these fields strings
+/// of JavaScript which correspond to the appropriate parts.
+///
+/// The Node.js script will look something like:
+///
+/// ```js
+/// // eval Config::imports
+///
+/// (async () => {
+///     // eval RepleConf::before
+///
+///    for await (const line of repl()) {
+///         eval(line)
+///    }
+///
+///    // eval Config::after
+/// })()
+/// ```
+/// You will probably want to provide [`Config::path_to_node_modules`] so use can use npm
+/// packages .
+pub struct Config {
+    /// JS imports
     pub imports: Vec<String>,
     /// code that runs before the repl in an async context. setup, etc
     pub before: Vec<String>,
@@ -32,7 +54,7 @@ pub struct ReplConf {
     /// A function that constructs the shell script which runs the repl.
     /// It is passed the directory the reply is run from, and the full path to the `script_file_name` file.
     /// By default the function creates the command `/path/to/nodejs /path/to/repl_script.js`.
-    build_command: Option<Box<dyn Fn(&ReplConf, &str, &str) -> String>>,
+    build_command: Option<Box<dyn Fn(&Config, &str, &str) -> String>>,
     /// a list paths that will be copied into the directory alongside the script.
     copy_dirs: Vec<String>,
     /// path to a node_modules directory which node will use
@@ -44,9 +66,9 @@ pub struct ReplConf {
     eof: Vec<u8>,
 }
 
-impl std::fmt::Debug for ReplConf {
+impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReplConf")
+        f.debug_struct("Config")
             .field("imports", &self.imports)
             .field("before", &self.before)
             .field("repl_code", &self.repl_code)
@@ -61,13 +83,13 @@ impl std::fmt::Debug for ReplConf {
     }
 }
 
-impl ReplConf {
+impl Config {
     pub fn build() -> Result<Self> {
-        Ok(ReplConfBuilder::default().build()?)
+        Ok(ConfigBuilder::default().build()?)
     }
-    pub fn start(&self) -> Result<JsContext> {
+    pub fn start(&self) -> Result<Repl> {
         let (dir, mut child) = run_code(&self)?;
-        Ok(JsContext {
+        Ok(Repl {
             dir,
             stdin: child.stdin.take().unwrap(),
             stdout: child.stdout.take().unwrap().bytes(),
@@ -95,32 +117,7 @@ impl ReplConf {
     }
 }
 
-pub struct JsContext {
-    /// needs to be held until the working directory should be dropped
-    pub dir: TempDir,
-    pub stdin: async_process::ChildStdin,
-    pub stdout: Bytes<async_process::ChildStdout>,
-    pub child: async_process::Child,
-    pub eof: Vec<u8>,
-}
-
-impl JsContext {
-    pub async fn repl(&mut self, code: &str) -> Result<Vec<u8>> {
-        let code = [
-            b";(async () =>{\n",
-            code.as_bytes(),
-            b"; process.stdout.write('",
-            &self.eof,
-            b"');",
-            b"})();",
-        ]
-        .concat();
-        self.stdin.write_all(&code).await?;
-        Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
-    }
-}
-
-fn default_build_command(conf: &ReplConf, _working_dir: &str, path_to_script: &str) -> String {
+fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
     let node_env = conf
         .path_to_node_modules
         .as_ref()
@@ -130,7 +127,7 @@ fn default_build_command(conf: &ReplConf, _working_dir: &str, path_to_script: &s
     format!("{} {} {path_to_script}", node_env, conf.node_binary)
 }
 
-fn run_code(conf: &ReplConf) -> Result<(TempDir, async_process::Child)> {
+fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     let working_dir = tempfile::tempdir()?;
 
     let script_path = working_dir.path().join(&conf.script_file_name);
@@ -170,6 +167,37 @@ fn run_code(conf: &ReplConf) -> Result<(TempDir, async_process::Child)> {
     ))
 }
 
+pub struct Repl {
+    /// Needs to be held until the working directory should be dropped
+    pub dir: TempDir,
+    pub stdin: async_process::ChildStdin,
+    pub stdout: Bytes<async_process::ChildStdout>,
+    pub child: async_process::Child,
+    pub eof: Vec<u8>,
+}
+
+impl Repl {
+    /// Run some JavaScript. Returns whatever is sent to `stdout`
+    pub async fn repl(&mut self, code: &str) -> Result<Vec<u8>> {
+        let code = [
+            b";(async () =>{\n",
+            code.as_bytes(),
+            b"; process.stdout.write('",
+            &self.eof,
+            b"');",
+            b"})();",
+        ]
+        .concat();
+        self.stdin.write_all(&code).await?;
+        Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
+    }
+
+    /// Stop the REPL
+    pub async fn stop(&mut self) -> Result<Vec<u8>> {
+        self.repl("queue.done()'").await
+    }
+}
+
 async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
     let mut buff = vec![];
     while let Some(Ok(b)) = stdout.next().await {
@@ -193,7 +221,7 @@ pub enum Error {
     #[error("serde_json::Error")]
     SerdeJsonError(#[from] serde_json::Error),
     #[error("repl builder error")]
-    ReplConfBuilerError(#[from] ReplConfBuilderError),
+    ReplConfBuilerError(#[from] ConfigBuilderError),
 }
 type Result<T> = core::result::Result<T, Error>;
 
@@ -202,7 +230,7 @@ mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context = ReplConf::build()?.start()?;
+        let mut context = Config::build()?.start()?;
         let result = context.repl("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
         let result = context
@@ -219,7 +247,7 @@ process.stdout.write(`${b}`);
         let result = context.repl("process.stdout.write(`${c}`)").await?;
         assert_eq!(result, b"77");
 
-        let _result = context.repl("queue.done();").await?;
+        let _result = context.stop().await?;
         let _ = context.child.output().await?;
         Ok(())
     }
