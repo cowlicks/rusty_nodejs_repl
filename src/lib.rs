@@ -16,9 +16,16 @@ static DEFAULT_NODE_BINARY: &str = "node";
 #[derive(derive_builder::Builder, Default)]
 #[builder(default, pattern = "owned")]
 pub struct ReplConf {
+    /// imports
+    pub imports: Vec<String>,
+    /// code that runs before the repl in an async context. setup, etc
+    pub before: Vec<String>,
     /// define and run the repl
     #[builder(default = "REPL_JS.to_string()")]
-    repl_code: String,
+    pub repl_code: String,
+    /// code that runs after the repl. teardown, etc
+    /// run in revers order
+    pub after: Vec<String>,
     /// the name of the file within which the repl is run
     #[builder(default = "SCRIPT_FILE_NAME.to_string()")]
     script_file_name: String,
@@ -29,12 +36,29 @@ pub struct ReplConf {
     /// a list paths that will be copied into the directory alongside the script.
     copy_dirs: Vec<String>,
     /// path to a node_modules directory which node will use
-    path_to_node_modules: Option<String>,
+    pub path_to_node_modules: Option<String>,
     /// path to node binary
     #[builder(default = "DEFAULT_NODE_BINARY.to_string()")]
     node_binary: String,
     #[builder(default = "DEFAULT_EOF.to_vec()")]
     eof: Vec<u8>,
+}
+
+impl std::fmt::Debug for ReplConf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplConf")
+            .field("imports", &self.imports)
+            .field("before", &self.before)
+            .field("repl_code", &self.repl_code)
+            .field("after", &self.after)
+            .field("script_file_name", &self.script_file_name)
+            //.field("build_command", &self.build_command)
+            .field("copy_dirs", &self.copy_dirs)
+            .field("path_to_node_modules", &self.path_to_node_modules)
+            .field("node_binary", &self.node_binary)
+            .field("eof", &self.eof)
+            .finish()
+    }
 }
 
 impl ReplConf {
@@ -47,6 +71,24 @@ impl ReplConf {
             child,
             eof: self.eof.clone(),
         })
+    }
+
+    pub fn build_script(&self) -> String {
+        let import_str = self.imports.join(";\n");
+        let before_str = self.before.join(";\n");
+        let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
+        let after_str = after_str.join(";\n");
+        format!(
+            "
+{import_str}
+(async () => {{
+{before_str}
+  {}
+  await repl();
+{after_str}
+}})();",
+            self.repl_code
+        )
     }
 }
 
@@ -79,7 +121,7 @@ fn default_build_command(conf: &ReplConf, _working_dir: &str, path_to_script: &s
     let node_env = conf
         .path_to_node_modules
         .as_ref()
-        .map(|p| format!("NODE_ENV={p}"))
+        .map(|p| format!("NODE_PATH={p}"))
         .unwrap_or(Default::default());
 
     format!("{} {} {path_to_script}", node_env, conf.node_binary)
@@ -91,7 +133,7 @@ fn run_code(conf: &ReplConf) -> Result<(TempDir, async_process::Child)> {
     let script_path = working_dir.path().join(&conf.script_file_name);
     let script_file = File::create(&script_path)?;
 
-    write!(&script_file, "{}", &conf.repl_code)?;
+    write!(&script_file, "{}", &conf.build_script())?;
 
     let working_dir_path = working_dir.path().display().to_string();
     for dir in &conf.copy_dirs {
@@ -110,13 +152,9 @@ fn run_code(conf: &ReplConf) -> Result<(TempDir, async_process::Child)> {
     let script_path_str = script_path.display().to_string();
 
     let cmd = match &conf.build_command {
-        Some(func) => {
-            //let f = &func.as_ref();
-            func(&conf, &working_dir_path, &script_path_str)
-        }
+        Some(func) => func(&conf, &working_dir_path, &script_path_str),
         None => default_build_command(conf, &working_dir_path, &script_path_str),
     };
-    //let cmd = build_command(&working_dir_path, &script_path_str);
     Ok((
         working_dir,
         async_process::Command::new("sh")

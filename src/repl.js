@@ -94,9 +94,4 @@ async function repl() {
   }
 
   process.stdin.pause();
-
 }
-
-(async () => {
-  await repl();
-})();
