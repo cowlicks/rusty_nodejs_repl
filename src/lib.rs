@@ -62,6 +62,9 @@ impl std::fmt::Debug for ReplConf {
 }
 
 impl ReplConf {
+    pub fn build() -> Result<Self> {
+        Ok(ReplConfBuilder::default().build()?)
+    }
     pub fn start(&self) -> Result<JsContext> {
         let (dir, mut child) = run_code(&self)?;
         Ok(JsContext {
@@ -199,9 +202,9 @@ mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context = ReplConfBuilder::default().build()?.start()?;
-        let result = context.repl("process.stdout.write('fooo6!');").await?;
-        assert_eq!(result, b"fooo6!");
+        let mut context = ReplConf::build()?.start()?;
+        let result = context.repl("console.log('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!\n");
         let result = context
             .repl(
                 "
