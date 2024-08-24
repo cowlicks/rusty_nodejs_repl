@@ -6,11 +6,11 @@ $ cargo add rusty_nodejs_repl
 
 ## Usage
 
-Put some JavaScript in a string and pass it to `JsContext::repl`. The function will return whatever was sent to `stdout`:
+Put some JavaScript in a string and pass it to `Repl::run`. The function will return whatever was sent to `stdout`:
 
 ```rust
-let mut context = Config::build()?.start()?;
-let result = context.repl("console.log('Hello, world!');").await?;
+let mut repl = Config::build()?.start()?;
+let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
 ```
 

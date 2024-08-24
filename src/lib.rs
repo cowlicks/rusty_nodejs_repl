@@ -4,10 +4,10 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 ```rust
 # tokio_test::block_on(async {
 # use rusty_nodejs_repl::{Repl, Config, Error};
-let mut context: Repl = Config::build()?.start()?;
-let result = context.repl("console.log('Hello, world!');").await?;
+let mut repl: Repl = Config::build()?.start()?;
+let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
-context.stop().await?;
+repl.stop().await?;
 # Ok::<(),Error>(())
 # }).unwrap();
 ```
@@ -194,7 +194,7 @@ pub struct Repl {
 
 impl Repl {
     /// Run some JavaScript. Returns whatever is sent to `stdout`
-    pub async fn repl(&mut self, code: &str) -> Result<Vec<u8>> {
+    pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
         let code = [
             b";(async () =>{\n",
             code.as_bytes(),
@@ -210,7 +210,7 @@ impl Repl {
 
     /// Stop the REPL
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
-        self.repl("queue.done()'").await
+        self.run("queue.done()'").await
     }
 }
 
@@ -247,10 +247,10 @@ mod test {
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
         let mut context: Repl = Config::build()?.start()?;
-        let result = context.repl("console.log('Hello, world!');").await?;
+        let result = context.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
         let result = context
-            .repl(
+            .run(
                 "
 a = 66;
 b = 7 + a;
@@ -260,7 +260,7 @@ process.stdout.write(`${b}`);
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = context.repl("process.stdout.write(`${c}`)").await?;
+        let result = context.run("process.stdout.write(`${c}`)").await?;
         assert_eq!(result, b"77");
 
         let _result = context.stop().await?;
