@@ -26,4 +26,4 @@ A way run arbitrary code through Node.js from Rust.
 
 This is for **testing**. When working on Node.js related Rust projects it can allow you to co-locate JavaScript along side your Rust.
 
-This crate came from implementing parts of the [Hypercore JS ecosystem](https://docs.pears.com/building-blocks/hypercore) where I needed need to test Rust output against JavaScript.
+This crate came from implementing parts of the [Hypercore JS ecosystem](https://docs.pears.com/building-blocks/hypercore)  in Rust. Which requires testing Rust output against JavaScript.

@@ -11,7 +11,7 @@ repl.stop().await?;
 # Ok::<(),Error>(())
 # }).unwrap();
 ```
-The REPL is run in it's own [`tempfile::TempDir`]. So anyfiles created alongside it will be cleaned up on exit.
+The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
