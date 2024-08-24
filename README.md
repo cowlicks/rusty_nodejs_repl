@@ -1,5 +1,7 @@
 # Rusty Node.js REPL 🦀 🌳 🌀
 
+[Documentation.](https://docs.rs/rusty_nodejs_repl/latest/rusty_nodejs_repl/)
+
 ```
 $ cargo add rusty_nodejs_repl
 ```
@@ -13,8 +15,6 @@ let mut repl = Config::build()?.start()?;
 let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
 ```
-
-[Documentation.](https://docs.rs/rusty_nodejs_repl/latest/rusty_nodejs_repl/)
 
 For more in-depth usage see the test in the [Rust Hypercore Replicator](https://github.com/cowlicks/replicator/blob/af7eda1979d98c40c8b46a1113b5c8b1100b41d5/replicator/tests/js_integration.rs#L62-L87).
 
