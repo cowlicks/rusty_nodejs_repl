@@ -182,7 +182,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     ))
 }
 
-/// Interface to the Node.js REPL. Send code with [`Repl::repl`], stop it with [`Repl::stop`].
+/// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
 pub struct Repl {
     /// Needs to be held until the working directory should be dropped
     pub dir: TempDir,
