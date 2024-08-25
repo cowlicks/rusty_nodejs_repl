@@ -13,6 +13,7 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
+#![warn(missing_debug_implementations, missing_docs)]
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
 use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
@@ -54,15 +55,15 @@ type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 pub struct Config {
     /// JS imports
     pub imports: Vec<String>,
-    /// code that runs before the REPL in an async context. setup, etc
+    /// Code that runs before the REPL in an async context. setup, etc.
     pub before: Vec<String>,
-    /// define and run the REPL
+    /// Define and run the REPL.
     #[builder(default = "REPL_JS.to_string()")]
     pub repl_code: String,
-    /// code that runs after the REPL. teardown, etc
-    /// run in revers order
+    /// Code that runs after the REPL. teardown, etc.
+    /// Run in revers order.
     pub after: Vec<String>,
-    /// the name of the file within which the REPL is run
+    /// Name of the file within which the REPL is run.
     #[builder(default = "SCRIPT_FILE_NAME.to_string()")]
     script_file_name: String,
     /// A function that constructs the shell script which runs the REPL.
@@ -72,11 +73,12 @@ pub struct Config {
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
     pub copy_dirs: Vec<String>,
-    /// path to a node_modules directory which node will use
+    /// Path to a node_modules directory which node will use.
     pub path_to_node_modules: Option<String>,
-    /// path to node binary
+    /// Path to node binary.
     #[builder(default = "DEFAULT_NODE_BINARY.to_string()")]
     node_binary: String,
+    /// Delimiter used to signal end of a single loop in the REPL.
     #[builder(default = "DEFAULT_EOF.to_vec()")]
     eof: Vec<u8>,
 }
@@ -99,9 +101,11 @@ impl std::fmt::Debug for Config {
 }
 
 impl Config {
+    /// Build a default [`Config`].
     pub fn build() -> Result<Self> {
         Ok(ConfigBuilder::default().build()?)
     }
+    /// Start Node.js and return [`Repl`].
     pub fn start(&self) -> Result<Repl> {
         let (dir, mut child) = run_code(self)?;
         Ok(Repl {
@@ -113,7 +117,7 @@ impl Config {
         })
     }
 
-    pub fn build_script(&self) -> String {
+    fn build_script(&self) -> String {
         let import_str = self.imports.join(";\n");
         let before_str = self.before.join(";\n");
         let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
@@ -158,10 +162,13 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
             .arg(&working_dir_path)
             .output()?;
         if dir_cp_cmd.status.code() != Some(0) {
-            return Err(Error::TestError(format!(
-                "failed to copy dir [{dir}] to [{working_dir_path}] got stderr: {}",
-                String::from_utf8_lossy(&dir_cp_cmd.stderr),
-            )));
+            return Err(Error::CommandFailed(
+                dir_cp_cmd.status.code(),
+                format!(
+                    "failed to copy dir [{dir}] to [{working_dir_path}] got stderr: {}",
+                    String::from_utf8_lossy(&dir_cp_cmd.stderr),
+                ),
+            ));
         }
     }
     let script_path_str = script_path.display().to_string();
@@ -183,17 +190,22 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
 }
 
 /// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
+#[derive(Debug)]
 pub struct Repl {
-    /// Needs to be held until the working directory should be dropped
+    /// Needs to be held until the working directory should be dropped.
     pub dir: TempDir,
+    /// stdin to the Node.js process.
     pub stdin: async_process::ChildStdin,
+    /// stdout from the Node.js process.
     pub stdout: Bytes<async_process::ChildStdout>,
+    /// Handle to the running Node.js process.
     pub child: async_process::Child,
+    /// The delimiter used to end one read-eval-print-loop
     pub eof: Vec<u8>,
 }
 
 impl Repl {
-    /// Run some JavaScript. Returns whatever is sent to `stdout`
+    /// Run some JavaScript. Returns whatever is through Node's `stdout`.
     pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
         let code = [
             b";(async () =>{\n",
@@ -208,7 +220,7 @@ impl Repl {
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
-    /// Stop the REPL
+    /// Stop the REPL.
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
         self.run("queue.done()'").await
     }
@@ -227,16 +239,17 @@ async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) ->
 }
 
 #[derive(thiserror::Error, Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Problem in tests: {0}")]
-    TestError(String),
-    #[error("IoError")]
+    #[error("cp command failed: code {0:?} msg: {1}")]
+    CommandFailed(Option<i32>, String),
+    #[error("IoError: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("Ut8Error")]
+    #[error("Ut8Error: {0}")]
     Utf8Error(#[from] FromUtf8Error),
-    #[error("serde_json::Error")]
+    #[error("serde_json::Error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
-    #[error("repl builder error")]
+    #[error("Error building config: {0}")]
     ConfigBuilderError(#[from] ConfigBuilderError),
 }
 type Result<T> = core::result::Result<T, Error>;
