@@ -222,7 +222,7 @@ impl Repl {
 
     /// Stop the REPL.
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
-        self.run("queue.done()'").await
+        self.run("queue.done();").await
     }
 }
 
