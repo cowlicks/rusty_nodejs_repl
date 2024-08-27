@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Removed
+
+
+
+## [0.2.1] - 2024-08-27
+
+### Added
+
+### Changed
+
 * Fixed a bug in `Repl::stop`
 
 ### Removed
@@ -55,7 +65,8 @@ Rename `Repl::repl` to `Repl::run`.
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.0...v0.1.1
