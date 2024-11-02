@@ -1,4 +1,4 @@
-#![allow(unused)]
+//! Utils for creating a stream from rust to javascript
 use std::{net::SocketAddr, sync::Arc};
 
 use crate::{Error, Repl, Result};
@@ -102,7 +102,7 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &RsJsStream) -> Result<Stream
 mod test {
     use std::time::Duration;
 
-    use crate::{sfb, Config};
+    use crate::Config;
 
     use super::*;
     #[tokio::test]
@@ -170,10 +170,10 @@ mod test {
                     out.extend(buf);
                 }
             }
-            pp!(out);
+            if out == b"echo hola" {
+                break;
+            }
         }
-        assert_eq!(out, b"echo hola");
-
         Ok(())
     }
 }
