@@ -89,6 +89,7 @@ pub struct Config {
     eof: Vec<u8>,
 }
 
+/// turn a rust vec like vec![1, 2, 3] into "Buffer.from([1, 2, 3])"
 fn fmt_rs_vec_u8_as_js_buf(bytes: &[u8]) -> String {
     let nums: Vec<String> = bytes.iter().map(|x| x.to_string()).collect();
     let s = nums.join(", ");

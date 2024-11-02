@@ -3,7 +3,6 @@
 use crate::{Error, Repl, Result};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     spawn,
     task::JoinHandle,
@@ -21,6 +20,8 @@ pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "";
 pub const DEFAULT_WAIT_MILLIS: u64 = 100;
 
 #[macro_export]
+/// sleep().await for the given # of millis. Defaults to 100ms.
+/// Useful for async testing .
 macro_rules! wait {
     ($millis:expr) => {
         tokio::time::sleep(Duration::from_millis($millis)).await;
@@ -83,6 +84,7 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &RsJsStream) -> Result<TcpStr
 #[cfg(test)]
 mod test {
     use crate::Config;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
