@@ -21,6 +21,8 @@ use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
 use async_process::{ChildStdout, Stdio};
 use tempfile::TempDir;
 
+pub mod pipe;
+
 const REPL_JS: &str = include_str!("./repl.js");
 const SCRIPT_FILE_NAME: &str = "script.js";
 const DEFAULT_NODE_BINARY: &str = "node";
