@@ -1,13 +1,11 @@
 //! Utils for creating a stream from rust to javascript
-use std::{net::SocketAddr, sync::Arc};
 
 use crate::{Error, Repl, Result};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     spawn,
-    sync::Mutex,
     task::JoinHandle,
 };
 
@@ -19,23 +17,20 @@ pub const LOOPBACK: &str = "127.0.0.1";
 pub const DEFAULT_JS_SOCKET_NAME: &str = "socket";
 /// Default code run after js socket
 pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "";
+/// Default # of milliseconds that wait macro waits
+pub const DEFAULT_WAIT_MILLIS: u64 = 100;
 
-const DEFAULT_MILLIS: u64 = 100;
-
+#[macro_export]
 macro_rules! wait {
     ($millis:expr) => {
         tokio::time::sleep(Duration::from_millis($millis)).await;
     };
     () => {
-        wait!(DEFAULT_MILLIS)
+        wait!(DEFAULT_WAIT_MILLIS)
     };
 }
+pub use wait;
 
-macro_rules! pp {
-    ($buf:expr) => {
-        println!("{}", String::from_utf8_lossy(&$buf));
-    };
-}
 /// Configuration for a Rust to Js stream
 #[derive(derive_builder::Builder, Debug)]
 #[builder(derive(Debug))]
@@ -73,67 +68,32 @@ fn js_code(
     )
 }
 
-type Streams = Arc<Mutex<Vec<Arc<Mutex<(TcpStream, SocketAddr)>>>>>;
-
 /// create a stream connecting rust and js
-pub async fn rust_js_stream(repl: &mut Repl, conf: &RsJsStream) -> Result<Streams> {
-    let streams = Arc::new(Mutex::new(Vec::new()));
+pub async fn rust_js_stream(repl: &mut Repl, conf: &RsJsStream) -> Result<TcpStream> {
     let listener =
         TcpListener::bind(format!("{}:{}", conf.hostname, conf.rs_listener_port)).await?;
     let shared_port = format!("{}", listener.local_addr()?.port());
-    let loop_streams = streams.clone();
-    spawn(async move {
-        loop {
-            let (out, addr) = listener.accept().await?;
-            loop_streams
-                .lock()
-                .await
-                .push(Arc::new(Mutex::new((out, addr))));
-        }
-        Ok::<(), Error>(())
-    });
+    let out: JoinHandle<Result<TcpStream>> = spawn(async move { Ok(listener.accept().await?.0) });
 
     let js_setup_code = js_code(&shared_port, conf);
-    let out = repl.run(&js_setup_code).await?;
-    Ok(streams)
+    let _ = repl.run(&js_setup_code).await?;
+    out.await.map_err(Error::RsSocketFail)?
 }
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
-
     use crate::Config;
 
     use super::*;
+
     #[tokio::test]
-    async fn t_conf() -> Result<()> {
-        // create first rs 2 js socket, make js side echo messages back through the socket
+    async fn rust_to_js_stream() -> Result<()> {
+        // create the stream. On the JS end, read from the socket and send it back
         let conf = RsJsStreamBuilder::default()
             .js_after_sockect_code(
                 "(s) => {
-                console.log('run socket before code');
-                s.on('close', (...x) => {
-                    console.log('close', ...x);
-                });
-                s.on('drain', (...x) => {
-                    console.log('drain', ...x);
-                });
-                s.on('pipe', (...x) => {
-                    console.log('pipe', ...x);
-                });
-                s.on('unpipe', (...x) => {
-                    console.log('unpipe', ...x);
-                });
-                s.on('finish', (...x) => {
-                    console.log('finish', ...x);
-                });
-                s.on('error', (...x) => {
-                    console.log('error', ...x);
-                });
                 s.on('data', (chunk) => {
-                    
                     s.write(`echo ${chunk.toString()}`);
-                    console.log('after s.write');
                 })
             }"
                 .to_string(),
@@ -141,39 +101,11 @@ mod test {
             .build()?;
 
         let mut repl: Repl = Config::build()?.start().await?;
-        let mut streams = rust_js_stream(&mut repl, &conf).await?;
-        let mut out = vec![];
-        loop {
-            if { !streams.lock().await.is_empty() } {
-                let len = { streams.lock().await.len() };
-                dbg!(len);
-                for i in 0..len {
-                    dbg!(i);
-                    let stream = { streams.lock().await[i].clone() };
-                    dbg!(stream.lock().await.0.write(b"hola").await?);
-                }
-                break;
-            }
-        }
-        loop {
-            if { !streams.lock().await.is_empty() } {
-                let len = { streams.lock().await.len() };
-                dbg!(len);
-                for i in 0..len {
-                    let mut buf = vec![0; 1];
-                    dbg!(i);
-                    let stream = { streams.lock().await[i].clone() };
-                    dbg!();
-                    let mut s = &mut stream.lock().await.0;
-                    dbg!(&s);
-                    let x = s.read_exact(&mut buf).await?;
-                    out.extend(buf);
-                }
-            }
-            if out == b"echo hola" {
-                break;
-            }
-        }
+        let mut stream = rust_js_stream(&mut repl, &conf).await?;
+        stream.write_all(b"hello and back").await?;
+        let mut out = vec![0; 19];
+        stream.read_exact(&mut out).await?;
+        assert_eq!(out, b"echo hello and back");
         Ok(())
     }
 }
