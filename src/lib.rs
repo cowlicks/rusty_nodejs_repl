@@ -29,6 +29,7 @@ const DEFAULT_NODE_BINARY: &str = "node";
 
 // TODO randomize EOF for each call to repl
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
+const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 #[derive(derive_builder::Builder, Default)]
@@ -231,6 +232,23 @@ pub struct Repl {
 }
 
 impl Repl {
+    /// get contents of stderr
+    pub async fn drain_stderr(&mut self) -> Result<Vec<u8>> {
+        Ok(read_with_timeout(
+            &mut self.stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await)
+    }
+    /// get contents of stdout
+    pub async fn drain_stdout(&mut self) -> Result<Vec<u8>> {
+        Ok(read_with_timeout(
+            &mut self.stdout,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await)
+    }
+
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
     pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
         let code = [
