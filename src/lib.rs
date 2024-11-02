@@ -124,7 +124,7 @@ impl Config {
         )
         .await;
         if !errs.is_empty() {
-            println!("{}", String::from_utf8_lossy(&errs));
+            error!("{}", String::from_utf8_lossy(&errs));
             return Err(Error::RunError);
         }
 
@@ -261,6 +261,15 @@ impl Repl {
         ]
         .concat();
         self.stdin.write_all(&code).await?;
+        let errs = read_with_timeout(
+            &mut self.stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await;
+        if !errs.is_empty() {
+            error!("{}", String::from_utf8_lossy(&errs));
+            return Err(Error::RunError);
+        }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
