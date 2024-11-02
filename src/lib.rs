@@ -13,10 +13,13 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
-#![warn(missing_debug_implementations, missing_docs)]
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
-use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
+#![warn(missing_debug_implementations, missing_docs, refining_impl_trait)]
+use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use tokio::{task::JoinError, time::timeout};
+use tracing::error;
+
+use std::{fs::File, io::Write, process::Command, string::FromUtf8Error, time::Duration};
 
 use async_process::{ChildStdout, Stdio};
 use tempfile::TempDir;
@@ -84,6 +87,12 @@ pub struct Config {
     /// Delimiter used to signal end of a single loop in the REPL.
     #[builder(default = "DEFAULT_EOF.to_vec()")]
     eof: Vec<u8>,
+}
+
+fn fmt_rs_vec_u8_as_js_buf(bytes: &[u8]) -> String {
+    let nums: Vec<String> = bytes.iter().map(|x| x.to_string()).collect();
+    let s = nums.join(", ");
+    format!("Buffer.from([{s}])")
 }
 
 impl std::fmt::Debug for Config {
@@ -279,6 +288,17 @@ impl Repl {
     }
 }
 
+async fn read_with_timeout<T, E, S: Stream<Item = std::result::Result<T, E>> + Unpin>(
+    stream: &mut S,
+    duration: Duration,
+) -> Vec<T> {
+    let mut buff = vec![];
+    while let Some(Ok(b)) = timeout(duration, stream.next()).await.unwrap_or_default() {
+        buff.push(b);
+    }
+    buff
+}
+
 async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
     let mut buff = vec![];
     while let Some(Ok(b)) = stdout.next().await {
@@ -294,6 +314,10 @@ async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) ->
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum Error {
+    #[error("Rust side error creating rs to js socket: {0}")]
+    RsSocketFail(JoinError),
+    #[error("Error building rust to javascript stream")]
+    RsJsStreamConfBad(#[from] pipe::RsJsStreamBuilderError),
     #[error("cp command failed: code {0:?} msg: {1}")]
     CommandFailed(Option<i32>, String),
     #[error("IoError: {0}")]
@@ -304,6 +328,10 @@ pub enum Error {
     SerdeJsonError(#[from] serde_json::Error),
     #[error("Error building config: {0}")]
     ConfigBuilderError(#[from] ConfigBuilderError),
+    #[error("Repl failed to start. This could be an issue with imports: {0:?}")]
+    FailedToStart(async_process::Child),
+    #[error("Repl got an error running your code")]
+    RunError,
 }
 type Result<T> = core::result::Result<T, Error>;
 
@@ -312,7 +340,7 @@ mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context: Repl = Config::build()?.start()?;
+        let mut context: Repl = Config::build()?.start().await?;
         let result = context.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
         let result = context
