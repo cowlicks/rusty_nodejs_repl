@@ -4,7 +4,7 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 ```rust
 # tokio_test::block_on(async {
 # use rusty_nodejs_repl::{Repl, Config, Error};
-let mut repl: Repl = Config::build()?.start()?;
+let mut repl: Repl = Config::build()?.start().await?;
 let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
 repl.stop().await?;
@@ -106,12 +106,30 @@ impl Config {
         Ok(ConfigBuilder::default().build()?)
     }
     /// Start Node.js and return [`Repl`].
-    pub fn start(&self) -> Result<Repl> {
+    pub async fn start(&self) -> Result<Repl> {
         let (dir, mut child) = run_code(self)?;
+        let stdin = child.stdin.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap().bytes();
+        let mut stdout = child.stdout.take().unwrap().bytes();
+        let read_res = pull_result_from_stdout(&mut stdout, &self.eof).await;
+        if String::from_utf8_lossy(&read_res) != REPL_READY {
+            return Err(Error::FailedToStart(child));
+        }
+        let errs = read_with_timeout(
+            &mut stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await;
+        if !errs.is_empty() {
+            println!("{}", String::from_utf8_lossy(&errs));
+            return Err(Error::RunError);
+        }
+
         Ok(Repl {
             dir,
-            stdin: child.stdin.take().unwrap(),
-            stdout: child.stdout.take().unwrap().bytes(),
+            stdin,
+            stderr,
+            stdout,
             child,
             eof: self.eof.clone(),
         })
@@ -122,19 +140,25 @@ impl Config {
         let before_str = self.before.join(";\n");
         let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
         let after_str = after_str.join(";\n");
-        format!(
+        let eof_buf = fmt_rs_vec_u8_as_js_buf(&self.eof);
+        let out = format!(
             "
 {import_str}
 (async () => {{
 {before_str}
   {}
+  ; process.stdout.write('{REPL_READY}');
+  ; process.stdout.write({});
   await repl();
 {after_str}
 }})();",
-            self.repl_code
-        )
+            self.repl_code, eof_buf,
+        );
+        out
     }
 }
+
+const REPL_READY: &str = "repl_ready";
 
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
     let node_env = conf
@@ -177,16 +201,14 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
         Some(func) => func(conf, &working_dir_path, &script_path_str),
         None => default_build_command(conf, &working_dir_path, &script_path_str),
     };
-    Ok((
-        working_dir,
-        async_process::Command::new("sh")
-            .stdout(Stdio::piped())
-            .stdin(Stdio::piped())
-            .stderr(Stdio::piped())
-            .arg("-c")
-            .arg(cmd)
-            .spawn()?,
-    ))
+    let proc = async_process::Command::new("sh")
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .arg("-c")
+        .arg(cmd)
+        .spawn()?;
+    Ok((working_dir, proc))
 }
 
 /// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
@@ -198,6 +220,8 @@ pub struct Repl {
     pub stdin: async_process::ChildStdin,
     /// stdout from the Node.js process.
     pub stdout: Bytes<async_process::ChildStdout>,
+    /// stdout from the Node.js process.
+    pub stderr: Bytes<async_process::ChildStderr>,
     /// Handle to the running Node.js process.
     pub child: async_process::Child,
     /// The delimiter used to end one read-eval-print-loop
