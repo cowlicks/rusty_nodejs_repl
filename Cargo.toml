@@ -25,7 +25,9 @@ serde = { version = "1.0.217", optional = true }
 serde_json = { version = "1.0.135", optional = true }
 
 [features]
+default = ["serde", "integration_utils"]
 serde = ["dep:serde", "dep:serde_json"]
+integration_utils = []
 
 [dev-dependencies]
 tokio-test = "0.4.4"
