@@ -276,7 +276,8 @@ impl Repl {
         )
         .await;
         if !errs.is_empty() {
-            error!("{}", String::from_utf8_lossy(&errs));
+            let estr = String::from_utf8_lossy(&errs);
+            error!("{}", estr);
             return Err(Error::RunError);
         }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
