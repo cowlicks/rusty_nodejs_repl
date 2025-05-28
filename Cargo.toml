@@ -17,11 +17,15 @@ categories = [
 async-process = "2.2.4"
 derive_builder = "0.20.0"
 futures-lite = "2.3.0"
-serde_json = "1.0.125"
 tempfile = "3.12.0"
 thiserror = "1.0.63"
 tokio = { version = "1.39.3", features = ["rt", "macros", "time", "net", "io-util"] }
 tracing = "0.1.40"
+serde = { version = "1.0.217", optional = true }
+serde_json = { version = "1.0.135", optional = true }
+
+[features]
+serde = ["dep:serde", "dep:serde_json"]
 
 [dev-dependencies]
 tokio-test = "0.4.4"

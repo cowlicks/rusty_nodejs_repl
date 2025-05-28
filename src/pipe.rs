@@ -24,10 +24,10 @@ pub const DEFAULT_WAIT_MILLIS: u64 = 100;
 /// Useful for async testing .
 macro_rules! wait {
     ($millis:expr) => {
-        tokio::time::sleep(Duration::from_millis($millis)).await;
+        tokio::time::sleep(std::time::Duration::from_millis($millis)).await;
     };
     () => {
-        wait!(DEFAULT_WAIT_MILLIS)
+        wait!(rusty_nodejs_repl::pipe::DEFAULT_WAIT_MILLIS)
     };
 }
 pub use wait;

@@ -283,6 +283,16 @@ impl Repl {
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+        &mut self,
+        code: S,
+    ) -> Result<T> {
+        let result = self.run(code).await?;
+        Ok(serde_json::from_str(&String::from_utf8(result)?)?)
+    }
+
     /// Stop the REPL.
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
         self.run("queue.done();").await
@@ -325,6 +335,7 @@ pub enum Error {
     IoError(#[from] std::io::Error),
     #[error("Ut8Error: {0}")]
     Utf8Error(#[from] FromUtf8Error),
+    #[cfg(feature = "serde")]
     #[error("serde_json::Error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
     #[error("Error building config: {0}")]
