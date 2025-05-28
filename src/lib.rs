@@ -4,7 +4,7 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 ```rust
 # tokio_test::block_on(async {
 # use rusty_nodejs_repl::{Repl, Config, Error};
-let mut repl: Repl = Config::build()?.start()?;
+let mut repl: Repl = Config::build()?.start().await?;
 let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
 repl.stop().await?;
@@ -13,13 +13,16 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
-#![warn(missing_debug_implementations, missing_docs)]
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, StreamExt};
 
-use std::{fs::File, io::Write, process::Command, string::FromUtf8Error};
-
+#![warn(missing_debug_implementations, missing_docs, refining_impl_trait)]
 use async_process::{ChildStdout, Stdio};
+use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use std::{fs::File, io::Write, process::Command, string::FromUtf8Error, time::Duration};
 use tempfile::TempDir;
+use tokio::{task::JoinError, time::timeout};
+use tracing::error;
+
+pub mod pipe;
 
 const REPL_JS: &str = include_str!("./repl.js");
 const SCRIPT_FILE_NAME: &str = "script.js";
@@ -27,6 +30,7 @@ const DEFAULT_NODE_BINARY: &str = "node";
 
 // TODO randomize EOF for each call to repl
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
+const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 #[derive(derive_builder::Builder, Default)]
@@ -83,6 +87,13 @@ pub struct Config {
     eof: Vec<u8>,
 }
 
+/// turn a rust vec like vec![1, 2, 3] into "Buffer.from([1, 2, 3])"
+fn fmt_rs_vec_u8_as_js_buf(bytes: &[u8]) -> String {
+    let nums: Vec<String> = bytes.iter().map(|x| x.to_string()).collect();
+    let s = nums.join(", ");
+    format!("Buffer.from([{s}])")
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -106,12 +117,30 @@ impl Config {
         Ok(ConfigBuilder::default().build()?)
     }
     /// Start Node.js and return [`Repl`].
-    pub fn start(&self) -> Result<Repl> {
+    pub async fn start(&self) -> Result<Repl> {
         let (dir, mut child) = run_code(self)?;
+        let stdin = child.stdin.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap().bytes();
+        let mut stdout = child.stdout.take().unwrap().bytes();
+        let read_res = pull_result_from_stdout(&mut stdout, &self.eof).await;
+        if String::from_utf8_lossy(&read_res) != REPL_READY {
+            return Err(Error::FailedToStart(child));
+        }
+        let errs = read_with_timeout(
+            &mut stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await;
+        if !errs.is_empty() {
+            error!("{}", String::from_utf8_lossy(&errs));
+            return Err(Error::RunError);
+        }
+
         Ok(Repl {
             dir,
-            stdin: child.stdin.take().unwrap(),
-            stdout: child.stdout.take().unwrap().bytes(),
+            stdin,
+            stderr,
+            stdout,
             child,
             eof: self.eof.clone(),
         })
@@ -122,19 +151,25 @@ impl Config {
         let before_str = self.before.join(";\n");
         let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
         let after_str = after_str.join(";\n");
-        format!(
+        let eof_buf = fmt_rs_vec_u8_as_js_buf(&self.eof);
+        let out = format!(
             "
 {import_str}
 (async () => {{
 {before_str}
   {}
+  ; process.stdout.write('{REPL_READY}');
+  ; process.stdout.write({});
   await repl();
 {after_str}
 }})();",
-            self.repl_code
-        )
+            self.repl_code, eof_buf,
+        );
+        out
     }
 }
+
+const REPL_READY: &str = "repl_ready";
 
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
     let node_env = conf
@@ -177,16 +212,14 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
         Some(func) => func(conf, &working_dir_path, &script_path_str),
         None => default_build_command(conf, &working_dir_path, &script_path_str),
     };
-    Ok((
-        working_dir,
-        async_process::Command::new("sh")
-            .stdout(Stdio::piped())
-            .stdin(Stdio::piped())
-            .stderr(Stdio::piped())
-            .arg("-c")
-            .arg(cmd)
-            .spawn()?,
-    ))
+    let proc = async_process::Command::new("sh")
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .arg("-c")
+        .arg(cmd)
+        .spawn()?;
+    Ok((working_dir, proc))
 }
 
 /// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
@@ -198,6 +231,8 @@ pub struct Repl {
     pub stdin: async_process::ChildStdin,
     /// stdout from the Node.js process.
     pub stdout: Bytes<async_process::ChildStdout>,
+    /// stderr from the Node.js process.
+    pub stderr: Bytes<async_process::ChildStderr>,
     /// Handle to the running Node.js process.
     pub child: async_process::Child,
     /// The delimiter used to end one read-eval-print-loop
@@ -205,6 +240,23 @@ pub struct Repl {
 }
 
 impl Repl {
+    /// get contents of stderr
+    pub async fn drain_stderr(&mut self) -> Result<Vec<u8>> {
+        Ok(read_with_timeout(
+            &mut self.stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await)
+    }
+    /// get contents of stdout
+    pub async fn drain_stdout(&mut self) -> Result<Vec<u8>> {
+        Ok(read_with_timeout(
+            &mut self.stdout,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await)
+    }
+
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
     pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
         let code = [
@@ -217,6 +269,15 @@ impl Repl {
         ]
         .concat();
         self.stdin.write_all(&code).await?;
+        let errs = read_with_timeout(
+            &mut self.stderr,
+            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
+        )
+        .await;
+        if !errs.is_empty() {
+            error!("{}", String::from_utf8_lossy(&errs));
+            return Err(Error::RunError);
+        }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
@@ -224,6 +285,17 @@ impl Repl {
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
         self.run("queue.done();").await
     }
+}
+
+async fn read_with_timeout<T, E, S: Stream<Item = std::result::Result<T, E>> + Unpin>(
+    stream: &mut S,
+    duration: Duration,
+) -> Vec<T> {
+    let mut buff = vec![];
+    while let Some(Ok(b)) = timeout(duration, stream.next()).await.unwrap_or_default() {
+        buff.push(b);
+    }
+    buff
 }
 
 async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) -> Vec<u8> {
@@ -241,6 +313,10 @@ async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) ->
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum Error {
+    #[error("Rust side error creating rs to js socket: {0}")]
+    RsSocketFail(JoinError),
+    #[error("Error building rust to javascript stream")]
+    RsJsStreamConfBad(#[from] pipe::RsJsStreamBuilderError),
     #[error("cp command failed: code {0:?} msg: {1}")]
     CommandFailed(Option<i32>, String),
     #[error("IoError: {0}")]
@@ -251,6 +327,10 @@ pub enum Error {
     SerdeJsonError(#[from] serde_json::Error),
     #[error("Error building config: {0}")]
     ConfigBuilderError(#[from] ConfigBuilderError),
+    #[error("Repl failed to start. This could be an issue with imports: {0:?}")]
+    FailedToStart(async_process::Child),
+    #[error("Repl got an error running your code")]
+    RunError,
 }
 type Result<T> = core::result::Result<T, Error>;
 
@@ -259,7 +339,7 @@ mod test {
     use super::*;
     #[tokio::test]
     async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context: Repl = Config::build()?.start()?;
+        let mut context: Repl = Config::build()?.start().await?;
         let result = context.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
         let result = context
