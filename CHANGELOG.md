@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* Add a way to connect Rust and JavaScript with a socket with `AsyncRead`/`AsyncWrite` interface.
+
 ### Changed
 
 ### Removed
