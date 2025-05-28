@@ -260,7 +260,8 @@ impl Repl {
     }
 
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
-    pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
+    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
+        let code = code.as_ref();
         let code = [
             b";(async () =>{\n",
             code.as_bytes(),
