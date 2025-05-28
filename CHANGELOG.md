@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * Add a way to connect Rust and JavaScript with a socket with `AsyncRead`/`AsyncWrite` interface.
+* Add `Repl::json_run` which runs json and parses stdout into a Rust type. Behind the `serde` feature flag.
+* Add integration utils for testing with a `git_root` function and `join_paths` macro. Behind `integration_utils` feature flag.
 
 ### Changed
 
