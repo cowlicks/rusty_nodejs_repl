@@ -22,6 +22,7 @@ use tempfile::TempDir;
 use tokio::{task::JoinError, time::timeout};
 use tracing::error;
 
+pub mod integration_utils;
 pub mod pipe;
 
 const REPL_JS: &str = include_str!("./repl.js");
@@ -344,7 +345,11 @@ pub enum Error {
     FailedToStart(async_process::Child),
     #[error("Repl got an error running your code")]
     RunError,
+    #[cfg(feature = "integration_utils")]
+    #[error("Error from integration utils")]
+    IntegrationUtils(#[from] integration_utils::Error),
 }
+
 type Result<T> = core::result::Result<T, Error>;
 
 #[cfg(test)]
