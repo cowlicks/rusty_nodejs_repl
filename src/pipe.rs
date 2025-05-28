@@ -15,7 +15,7 @@ pub const LOOPBACK: &str = "127.0.0.1";
 /// Default name of the javascript variable that holds the stream
 pub const DEFAULT_JS_SOCKET_NAME: &str = "socket";
 /// Default code run after js socket
-pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "";
+pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "(() => {})";
 /// Default # of milliseconds that wait macro waits
 pub const DEFAULT_WAIT_MILLIS: u64 = 100;
 
@@ -109,5 +109,13 @@ mod test {
         stream.read_exact(&mut out).await?;
         assert_eq!(out, b"echo hello and back");
         Ok(())
+    }
+    mod macros {
+        //! Putting this macro in it's own module so that we can test that it is not implicitly
+        //! relying on contect
+        #[tokio::test]
+        async fn wait_test() {
+            wait!(1);
+        }
     }
 }
