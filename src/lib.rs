@@ -15,14 +15,12 @@ The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongsid
 */
 
 #![warn(missing_debug_implementations, missing_docs, refining_impl_trait)]
+use async_process::{ChildStdout, Stdio};
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use std::{fs::File, io::Write, process::Command, string::FromUtf8Error, time::Duration};
+use tempfile::TempDir;
 use tokio::{task::JoinError, time::timeout};
 use tracing::error;
-
-use std::{fs::File, io::Write, process::Command, string::FromUtf8Error, time::Duration};
-
-use async_process::{ChildStdout, Stdio};
-use tempfile::TempDir;
 
 pub mod pipe;
 
@@ -233,7 +231,7 @@ pub struct Repl {
     pub stdin: async_process::ChildStdin,
     /// stdout from the Node.js process.
     pub stdout: Bytes<async_process::ChildStdout>,
-    /// stdout from the Node.js process.
+    /// stderr from the Node.js process.
     pub stderr: Bytes<async_process::ChildStderr>,
     /// Handle to the running Node.js process.
     pub child: async_process::Child,
