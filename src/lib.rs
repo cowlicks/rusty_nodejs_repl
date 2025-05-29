@@ -22,6 +22,7 @@ use tempfile::TempDir;
 use tokio::{task::JoinError, time::timeout};
 use tracing::error;
 
+pub mod integration_utils;
 pub mod pipe;
 
 const REPL_JS: &str = include_str!("./repl.js");
@@ -258,7 +259,8 @@ impl Repl {
     }
 
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
-    pub async fn run(&mut self, code: &str) -> Result<Vec<u8>> {
+    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
+        let code = code.as_ref();
         let code = [
             b";(async () =>{\n",
             code.as_bytes(),
@@ -275,10 +277,21 @@ impl Repl {
         )
         .await;
         if !errs.is_empty() {
-            error!("{}", String::from_utf8_lossy(&errs));
+            let estr = String::from_utf8_lossy(&errs);
+            error!("{}", estr);
             return Err(Error::RunError);
         }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
+    }
+
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+        &mut self,
+        code: S,
+    ) -> Result<T> {
+        let result = self.run(code).await?;
+        Ok(serde_json::from_str(&String::from_utf8(result)?)?)
     }
 
     /// Stop the REPL.
@@ -323,6 +336,7 @@ pub enum Error {
     IoError(#[from] std::io::Error),
     #[error("Ut8Error: {0}")]
     Utf8Error(#[from] FromUtf8Error),
+    #[cfg(feature = "serde")]
     #[error("serde_json::Error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
     #[error("Error building config: {0}")]
@@ -331,7 +345,11 @@ pub enum Error {
     FailedToStart(async_process::Child),
     #[error("Repl got an error running your code")]
     RunError,
+    #[cfg(feature = "integration_utils")]
+    #[error("Error from integration utils")]
+    IntegrationUtils(#[from] integration_utils::Error),
 }
+
 type Result<T> = core::result::Result<T, Error>;
 
 #[cfg(test)]
