@@ -257,6 +257,10 @@ impl Repl {
         )
         .await)
     }
+    /// Get contents of stdout as a [`String`]
+    pub async fn drain_stdout_string(&mut self) -> Result<String> {
+        Ok(String::from_utf8(self.drain_stdout().await?)?)
+    }
 
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
     pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
@@ -282,6 +286,10 @@ impl Repl {
             return Err(Error::RunError);
         }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
+    }
+    /// Run some JavaScript. Returns whatever is through Node's `stdout`.
+    pub async fn str_run<S: AsRef<str>>(&mut self, code: S) -> Result<String> {
+        Ok(String::from_utf8(self.run(code).await?)?)
     }
 
     #[cfg(feature = "serde")]
