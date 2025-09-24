@@ -373,11 +373,11 @@ type Result<T> = core::result::Result<T, Error>;
 mod test {
     use super::*;
     #[tokio::test]
-    async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context: Repl = Config::build()?.start().await?;
-        let result = context.run("console.log('Hello, world!');").await?;
+    async fn read_eval_print_works() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
-        let result = context
+        let result = repl
             .run(
                 "
 a = 66;
@@ -388,11 +388,11 @@ process.stdout.write(`${b}`);
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = context.run("process.stdout.write(`${c}`)").await?;
+        let result = repl.run("process.stdout.write(`${c}`)").await?;
         assert_eq!(result, b"77");
 
-        let _result = context.stop().await?;
-        let _ = context.child.output().await?;
+        let _result = repl.stop().await?;
+        let _ = repl.child.output().await?;
         Ok(())
     }
 }
