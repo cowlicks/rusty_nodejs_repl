@@ -284,6 +284,23 @@ impl Repl {
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
+    /// Print stdout & stderr and return them.
+    pub async fn print(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
+        let stdout = self.drain_stdout().await?;
+        let stderr = self.drain_stderr().await?;
+        if !stdout.is_empty() {
+            println!("stdout: {}", String::from_utf8(stdout.clone())?);
+        }
+        if !stderr.is_empty() {
+            println!("stderr: {}", String::from_utf8(stderr.clone())?);
+        }
+        Ok((stdout, stderr))
+    }
+    /// Run some JavaScript. Returns whatever is through Node's `stdout`.
+    pub async fn str_run<S: AsRef<str>>(&mut self, code: S) -> Result<String> {
+        Ok(String::from_utf8(self.run(code).await?)?)
+    }
+
     #[cfg(feature = "serde")]
     /// Run some JavaScript. Deserialize stdout into `T`.
     pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
