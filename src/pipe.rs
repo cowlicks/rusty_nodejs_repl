@@ -47,7 +47,7 @@ pub struct IoConfig {
     js_socket_name: String,
     /// code run after the socket
     #[builder(default = "DEFAULT_JS_AFTER_SOCKET_CODE.to_string()")]
-    js_after_sockect_code: String,
+    js_after_socket_code: String,
 }
 
 fn js_code(
@@ -55,7 +55,7 @@ fn js_code(
     IoConfig {
         hostname,
         js_socket_name,
-        js_after_sockect_code,
+        js_after_socket_code,
         ..
     }: &IoConfig,
 ) -> String {
@@ -64,7 +64,7 @@ fn js_code(
 // Connect to the port and define socket
 {js_socket_name} = require('net').connect('{shared_port}', '{hostname}');
 ///
-;await ({js_after_sockect_code})({js_socket_name});
+;await ({js_after_socket_code})({js_socket_name});
 "
     )
 }
@@ -92,7 +92,7 @@ mod test {
     async fn rust_to_js_stream() -> Result<()> {
         // create the stream. On the JS end, read from the socket and send it back
         let conf = IoConfigBuilder::default()
-            .js_after_sockect_code(
+            .js_after_socket_code(
                 "(s) => {
                 s.on('data', (chunk) => {
                     s.write(`echo ${chunk.toString()}`);
@@ -123,7 +123,7 @@ mod test {
     async fn foo() -> Result<()> {
         // create the stream. On the JS end, read from the socket and send it back
         let conf = IoConfigBuilder::default()
-            .js_after_sockect_code(
+            .js_after_socket_code(
                 "(s) => {
     output = (x) => {
         s.write(x);
@@ -145,7 +145,7 @@ mod test {
         let IoConfig {
             hostname,
             js_socket_name,
-            js_after_sockect_code,
+            js_after_socket_code,
             ..
         } = conf;
 
@@ -154,7 +154,7 @@ mod test {
 // Connect to the port and define socket
 {js_socket_name} = require('net').connect('{shared_port}', '{hostname}');
 ///
-;await ({js_after_sockect_code})({js_socket_name});
+;await ({js_after_socket_code})({js_socket_name});
 "
         );
 
