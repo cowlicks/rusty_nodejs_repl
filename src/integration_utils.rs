@@ -34,3 +34,29 @@ pub fn git_root() -> Result<String, Error> {
         .output()?;
     Ok(String::from_utf8(x.stdout)?.trim().to_string())
 }
+
+/// Intialize logging
+pub fn log() {
+    static START_LOGS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    START_LOGS.get_or_init(|| {
+        use tracing_subscriber::{
+            layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter,
+        };
+        let env_filter = EnvFilter::from_default_env(); // Reads `RUST_LOG` environment variable
+
+        // Create the hierarchical layer from tracing_tree
+        let tree_layer = tracing_tree::HierarchicalLayer::new(2) // 2 spaces per indent level
+            .with_targets(true)
+            .with_bracketed_fields(true)
+            .with_indent_lines(true)
+            .with_thread_ids(false)
+            .with_thread_names(true)
+            //.with_span_modes(true)
+            ;
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tree_layer)
+            .init();
+    });
+}
