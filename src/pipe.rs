@@ -36,17 +36,17 @@ pub use wait;
 #[derive(derive_builder::Builder, Debug)]
 #[builder(derive(Debug), pattern = "owned")]
 pub struct IoConfig {
-    #[builder(default = "DEFAULT_PORT.to_string()")]
     /// The port to use. Defaults to "0" which casues a random port to be used
+    #[builder(default = "DEFAULT_PORT.to_string()")]
     rs_listener_port: String,
-    #[builder(default = "LOOPBACK.to_string()")]
     /// The hostname used
+    #[builder(default = "LOOPBACK.to_string()")]
     hostname: String,
-    #[builder(default = "DEFAULT_JS_SOCKET_NAME.to_string()")]
     /// The name of the javascript variable that holds the stream
+    #[builder(default = "DEFAULT_JS_SOCKET_NAME.to_string()")]
     js_socket_name: String,
-    #[builder(default = "DEFAULT_JS_AFTER_SOCKET_CODE.to_string()")]
     /// code run after the socket
+    #[builder(default = "DEFAULT_JS_AFTER_SOCKET_CODE.to_string()")]
     js_after_sockect_code: String,
 }
 
