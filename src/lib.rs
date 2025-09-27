@@ -22,6 +22,8 @@ use tempfile::TempDir;
 use tokio::{task::JoinError, time::timeout};
 use tracing::error;
 
+mod error;
+pub use error::{Error, Result};
 pub mod integration_utils;
 pub mod pipe;
 
