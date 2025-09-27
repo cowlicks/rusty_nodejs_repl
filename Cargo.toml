@@ -27,9 +27,10 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"], opt
 tracing-tree = { version = "0.4.0", optional = true }
 
 [features]
-default = ["serde", "integration_utils"]
+default = ["serde", "integration_utils", "socket"]
 serde = ["dep:serde", "dep:serde_json"]
 integration_utils = ["dep:tracing-tree", "dep:tracing-subscriber"]
+socket = []
 
 [dev-dependencies]
 tokio-test = "0.4.4"
