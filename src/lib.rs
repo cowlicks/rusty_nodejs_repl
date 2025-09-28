@@ -416,7 +416,7 @@ process.stdout.write(`${b}`);
 
     #[cfg(feature = "socket")]
     #[tokio::test]
-    async fn boof() -> Result<()> {
+    async fn test_run_tcp() -> Result<()> {
         let mut repl: Repl = Config::build()?.start().await?;
         let result = repl.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");

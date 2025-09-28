@@ -190,26 +190,17 @@ mod test {
         assert_eq!(out, b"echo hello and back");
         Ok(())
     }
-    mod macros {
-        //! Putting this macro in it's own module so that we can test that it is not implicitly
-        //! relying on context
-        #[tokio::test]
-        async fn wait_test() {
-            wait!(1);
-        }
-    }
-
     #[tokio::test]
-    async fn bar() -> Result<()> {
+    async fn test_start_server_and_make_js_code() -> Result<()> {
         // create the stream. On the JS end, read from the socket and send it back
         let conf = IoConfigBuilder::default().build()?;
-        let (out, (setup, _teardown)) = conf.start_server_and_make_js_code().await?;
+        let (on_socket, (setup, _teardown)) = conf.start_server_and_make_js_code().await?;
 
         let mut repl: Repl = Config::build()?.start().await?;
 
         let eof = "abc";
         let _ = repl.run(&setup).await?;
-        let mut stream = out.await?;
+        let mut stream = on_socket.await?;
 
         let x = repl
             .run(format!(
@@ -223,5 +214,14 @@ output('69{eof}');
         let result = pull_result_from_tcp(&mut stream, eof.as_bytes()).await?;
         assert_eq!(result, b"69");
         Ok(())
+    }
+
+    mod macros {
+        //! Putting this macro in it's own module so that we can test that it is not implicitly
+        //! relying on context
+        #[tokio::test]
+        async fn wait_test() {
+            wait!(1);
+        }
     }
 }
