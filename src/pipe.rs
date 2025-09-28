@@ -144,6 +144,8 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &IoConfig) -> Result<TcpStrea
     out.await.map_err(Error::RsSocketFail)?
 }
 
+/// Read from the provided [`TcpStream`] until we read the value of the `eof` argument`. Return all
+/// data read before `eof`.
 pub async fn pull_result_from_tcp(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
     let mut buff = vec![];
     let mut byte = [0u8; 1];

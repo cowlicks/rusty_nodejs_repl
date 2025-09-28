@@ -25,4 +25,5 @@ pub enum Error {
     IntegrationUtils(#[from] crate::integration_utils::Error),
 }
 
+/// Alias of [`std::error::Error`] to use our own [`Error`]
 pub type Result<T> = core::result::Result<T, Error>;

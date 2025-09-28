@@ -13,7 +13,7 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
-#![warn(missing_debug_implementations, refining_impl_trait)]
+#![warn(missing_debug_implementations, refining_impl_trait, missing_docs)]
 
 mod error;
 #[cfg(feature = "integration_utils")]
@@ -93,6 +93,7 @@ pub struct Config {
     /// Delimiter used to signal end of a single loop in the REPL.
     #[builder(default = "DEFAULT_EOF.to_vec()")]
     eof: Vec<u8>,
+    /// Configuration for creating a socket connecting the Rust and JavaScript process
     #[builder(default = "IoConfigBuilder::default().build().unwrap()")]
     io_config: IoConfig,
 }
@@ -300,7 +301,7 @@ impl Repl {
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
     }
 
-    // NB: add note about renaming `output`.
+    // TODO: add a way to rename `output`.
     /// Run some JavaScript. Return's a [`Vec<u8>`] containing whatever is sent through the
     /// "`output`" function in the JavaScript process. This is like [`Repl::run`] except it gets
     /// the result from TCP socket instead of stdout.
