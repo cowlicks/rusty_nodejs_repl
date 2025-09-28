@@ -13,8 +13,13 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
-
 #![warn(missing_debug_implementations, refining_impl_trait)]
+
+mod error;
+#[cfg(feature = "integration_utils")]
+pub mod integration_utils;
+pub mod pipe;
+
 use async_process::{ChildStdout, Stdio};
 use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
 use std::{fs::File, io::Write, process::Command, time::Duration};
@@ -22,12 +27,8 @@ use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::error;
 
-mod error;
-pub use error::{Error, Result};
-
 use crate::pipe::{pull_result_from_tcp, IoConfig, IoConfigBuilder};
-pub mod integration_utils;
-pub mod pipe;
+pub use error::{Error, Result};
 
 const REPL_JS: &str = include_str!("./repl.js");
 const SCRIPT_FILE_NAME: &str = "script.js";

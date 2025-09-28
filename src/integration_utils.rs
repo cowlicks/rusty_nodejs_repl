@@ -1,4 +1,6 @@
-//! Useful things for wrting integration tests
+//! As this crate is intended for testing. I found it useful to include a few things related to
+//! integration testing.
+
 use std::process::Command;
 
 #[derive(thiserror::Error, Debug)]
