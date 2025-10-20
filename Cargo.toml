@@ -5,7 +5,7 @@ version = "0.2.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/cowlicks/rusty_nodejs_repl"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 keywords = ["nodejs", "repl", "interpreter", "testing", "javascript"]
 categories = [
  "development-tools::testing",
