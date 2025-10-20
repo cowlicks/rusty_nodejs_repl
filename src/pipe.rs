@@ -37,6 +37,7 @@ macro_rules! wait {
         wait!(rusty_nodejs_repl::pipe::DEFAULT_WAIT_MILLIS)
     };
 }
+use tracing::instrument;
 pub use wait;
 
 /// Configuration for a Rust to Js stream. Responsible for creating a [`TcpStream`] and the code
@@ -146,6 +147,7 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &IoConfig) -> Result<TcpStrea
 
 /// Read from the provided [`TcpStream`] until we read the value of the `eof` argument`. Return all
 /// data read before `eof`.
+#[instrument(skip_all, err)]
 pub async fn pull_result_from_tcp(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
     let mut buff = vec![];
     let mut byte = [0u8; 1];

@@ -318,20 +318,53 @@ impl Repl {
         ]
         .concat();
         self.stdin.write_all(&code).await?;
-        pull_result_from_tcp(&mut self.socket, &self.eof).await
+        let res = pull_result_from_tcp(&mut self.socket, &self.eof).await;
+        if let Err(e) = &res && let Error::IoError(ioerr) = e && std::io::ErrorKind::UnexpectedEof == ioerr.kind() {
+            // log stderr
+            let stderr = self.drain_stderr().await?;
+            let stdout = self.drain_stdout().await?;
+            let stderr = String::from_utf8_lossy(&stderr);
+            let stdout = String::from_utf8_lossy(&stdout);
+            eprintln!("Repl.run_tcp failed.
+>>>>>>>>>> STDOUT >>>>>>>>>>
+stdout:\n{stdout}
+stdout:\n{stdout}
+<<<<<<<< END STDOUT <<<<<<<<
+>>>>>>>>>> STDERR >>>>>>>>>>
+stderr:\n{stderr}
+<<<<<<<< END STDERR <<<<<<<<
+");
+            Err(Error::RunTcpError(stderr.to_string()))
+
+        } else {
+            res
+        }
     }
 
     /// Print stdout & stderr and return them.
-    pub async fn print(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
-        let stdout = self.drain_stdout().await?;
+    pub async fn print(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let stderr = self.drain_stderr().await?;
-        if !stdout.is_empty() {
-            println!("stdout: {}", String::from_utf8(stdout.clone())?);
-        }
         if !stderr.is_empty() {
             println!("stderr: {}", String::from_utf8(stderr.clone())?);
         }
-        Ok((stdout, stderr))
+        let stdout = self.drain_stdout().await?;
+        if !stdout.is_empty() {
+            println!("stdout: {}", String::from_utf8(stdout.clone())?);
+        }
+        if stderr.is_empty() && stdout.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((stdout, stderr)))
+        }
+    }
+
+    /// Print JS stdout & stderr until there is nothing left to print
+    pub async fn print_until_settled(&mut self) -> Result<()> {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while self.print().await?.is_some() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(())
     }
     /// Run some JavaScript. Returns whatever is through Node's `stdout`.
     pub async fn str_run<S: AsRef<str>>(&mut self, code: S) -> Result<String> {
@@ -356,6 +389,15 @@ impl Repl {
     ) -> Result<T> {
         let result = self.run_tcp(code).await?;
         Ok(serde_json::from_str(&String::from_utf8(result)?)?)
+    }
+
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn get_name<T: serde::de::DeserializeOwned, S: std::fmt::Display>(
+        &mut self,
+        name: S,
+    ) -> Result<T> {
+        self.json_run_tcp(format!("outputJson(await {name})")).await
     }
 
     /// Stop the REPL.

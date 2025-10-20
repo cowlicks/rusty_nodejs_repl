@@ -23,6 +23,8 @@ pub enum Error {
     #[cfg(feature = "integration_utils")]
     #[error("Error from integration utils")]
     IntegrationUtils(#[from] crate::integration_utils::Error),
+    #[error("Repl.run_tcp error {0}")]
+    RunTcpError(String),
 }
 
 /// Alias of [`std::error::Error`] to use our own [`Error`]
