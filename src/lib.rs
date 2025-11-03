@@ -328,7 +328,6 @@ impl Repl {
             eprintln!("Repl.run_tcp failed.
 >>>>>>>>>> STDOUT >>>>>>>>>>
 stdout:\n{stdout}
-stdout:\n{stdout}
 <<<<<<<< END STDOUT <<<<<<<<
 >>>>>>>>>> STDERR >>>>>>>>>>
 stderr:\n{stderr}
