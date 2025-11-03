@@ -14,6 +14,10 @@ Put some JavaScript in a string and pass it to `Repl::run`. The function will re
 let mut repl = Config::build()?.start()?;
 let result = repl.run("console.log('Hello, world!');").await?;
 assert_eq!(result, b"Hello, world!\n");
+
+// Or instead get data from JavaScript via the `output` function along with `Repl::run_tcp`
+let result = repl.run_tcp("output('passed through a socket')").await?;
+assert_eq!(result, b"passed through a socket");
 ```
 
 For more in-depth usage see the test in the [Rust Hypercore Replicator](https://github.com/cowlicks/replicator/blob/af7eda1979d98c40c8b46a1113b5c8b1100b41d5/replicator/tests/js_integration.rs#L62-L87).
