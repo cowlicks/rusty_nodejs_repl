@@ -13,17 +13,22 @@ repl.stop().await?;
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
 */
+#![warn(missing_debug_implementations, refining_impl_trait, missing_docs)]
 
-#![warn(missing_debug_implementations, missing_docs, refining_impl_trait)]
-use async_process::{ChildStdout, Stdio};
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
-use std::{fs::File, io::Write, process::Command, string::FromUtf8Error, time::Duration};
-use tempfile::TempDir;
-use tokio::{task::JoinError, time::timeout};
-use tracing::error;
-
+mod error;
+#[cfg(feature = "integration_utils")]
 pub mod integration_utils;
 pub mod pipe;
+
+use async_process::{ChildStdout, Stdio};
+use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use std::{fs::File, io::Write, process::Command, time::Duration};
+use tempfile::TempDir;
+use tokio::{net::TcpStream, time::timeout};
+use tracing::error;
+
+use crate::pipe::{pull_result_from_tcp, IoConfig, IoConfigBuilder};
+pub use error::{Error, Result};
 
 const REPL_JS: &str = include_str!("./repl.js");
 const SCRIPT_FILE_NAME: &str = "script.js";
@@ -32,10 +37,10 @@ const DEFAULT_NODE_BINARY: &str = "node";
 // TODO randomize EOF for each call to repl
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
+const DEFAULT_READBUFF_TIMEOUT: Duration = Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS);
 
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
-#[derive(derive_builder::Builder, Default)]
-#[builder(default, pattern = "owned")]
+
 /// Configurating for [`Repl`]. Usually you will want to setup the REPL context by importing some modules
 /// and doing some setup. Then maybe, run some teardown code after the REPL closes.
 /// Do this by giving JavaScript strings to [`Config::imports`], [`Config::before`], and [`Config::after`] fields.
@@ -57,6 +62,8 @@ type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 /// ```
 /// You will probably want to provide [`Config::path_to_node_modules`] so use can use npm
 /// packages .
+#[derive(derive_builder::Builder, Default)]
+#[builder(default, pattern = "owned")]
 pub struct Config {
     /// JS imports
     pub imports: Vec<String>,
@@ -66,7 +73,7 @@ pub struct Config {
     #[builder(default = "REPL_JS.to_string()")]
     pub repl_code: String,
     /// Code that runs after the REPL. teardown, etc.
-    /// Run in revers order.
+    /// Run in reverse order.
     pub after: Vec<String>,
     /// Name of the file within which the REPL is run.
     #[builder(default = "SCRIPT_FILE_NAME.to_string()")]
@@ -86,6 +93,9 @@ pub struct Config {
     /// Delimiter used to signal end of a single loop in the REPL.
     #[builder(default = "DEFAULT_EOF.to_vec()")]
     eof: Vec<u8>,
+    /// Configuration for creating a socket connecting the Rust and JavaScript process
+    #[builder(default = "IoConfigBuilder::default().build().unwrap()")]
+    io_config: IoConfig,
 }
 
 /// turn a rust vec like vec![1, 2, 3] into "Buffer.from([1, 2, 3])"
@@ -118,7 +128,16 @@ impl Config {
         Ok(ConfigBuilder::default().build()?)
     }
     /// Start Node.js and return [`Repl`].
-    pub async fn start(&self) -> Result<Repl> {
+    pub async fn start(&mut self) -> Result<Repl> {
+        #[cfg(feature = "socket")]
+        let socket_future = {
+            let (socket_future, (js_setup_code, teardown_code)) =
+                self.io_config.start_server_and_make_js_code().await?;
+
+            self.before.push(js_setup_code);
+            self.after.push(teardown_code);
+            socket_future
+        };
         let (dir, mut child) = run_code(self)?;
         let stdin = child.stdin.take().unwrap();
         let mut stderr = child.stderr.take().unwrap().bytes();
@@ -127,11 +146,7 @@ impl Config {
         if String::from_utf8_lossy(&read_res) != REPL_READY {
             return Err(Error::FailedToStart(child));
         }
-        let errs = read_with_timeout(
-            &mut stderr,
-            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
-        )
-        .await;
+        let errs = read_with_timeout(&mut stderr, DEFAULT_READBUFF_TIMEOUT).await;
         if !errs.is_empty() {
             error!("{}", String::from_utf8_lossy(&errs));
             return Err(Error::RunError);
@@ -144,6 +159,8 @@ impl Config {
             stdout,
             child,
             eof: self.eof.clone(),
+            #[cfg(feature = "socket")]
+            socket: socket_future.await?,
         })
     }
 
@@ -155,17 +172,25 @@ impl Config {
         let eof_buf = fmt_rs_vec_u8_as_js_buf(&self.eof);
         let out = format!(
             "
+// start imports
 {import_str}
+// end imports
 (async () => {{
+// start before_str
 {before_str}
+// end before_str
+
   {}
   ; process.stdout.write('{REPL_READY}');
   ; process.stdout.write({});
   await repl();
+// start after_str
 {after_str}
+// end after_str
 }})();",
             self.repl_code, eof_buf,
         );
+
         out
     }
 }
@@ -238,27 +263,23 @@ pub struct Repl {
     pub child: async_process::Child,
     /// The delimiter used to end one read-eval-print-loop
     pub eof: Vec<u8>,
+    /// IO socket
+    #[cfg(feature = "socket")]
+    pub socket: TcpStream,
 }
 
 impl Repl {
     /// get contents of stderr
     pub async fn drain_stderr(&mut self) -> Result<Vec<u8>> {
-        Ok(read_with_timeout(
-            &mut self.stderr,
-            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
-        )
-        .await)
+        Ok(read_with_timeout(&mut self.stderr, DEFAULT_READBUFF_TIMEOUT).await)
     }
     /// get contents of stdout
     pub async fn drain_stdout(&mut self) -> Result<Vec<u8>> {
-        Ok(read_with_timeout(
-            &mut self.stdout,
-            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
-        )
-        .await)
+        Ok(read_with_timeout(&mut self.stdout, DEFAULT_READBUFF_TIMEOUT).await)
     }
 
-    /// Run some JavaScript. Returns whatever is through Node's `stdout`.
+    /// Run some JavaScript. Returns a [`Vec<u8>`] containing whatever is sent through the JavaScript
+    /// processes stdout.
     pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
         let code = code.as_ref();
         let code = [
@@ -271,17 +292,82 @@ impl Repl {
         ]
         .concat();
         self.stdin.write_all(&code).await?;
-        let errs = read_with_timeout(
-            &mut self.stderr,
-            Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS),
-        )
-        .await;
+        let errs = read_with_timeout(&mut self.stderr, DEFAULT_READBUFF_TIMEOUT).await;
         if !errs.is_empty() {
             let estr = String::from_utf8_lossy(&errs);
             error!("{}", estr);
             return Err(Error::RunError);
         }
         Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
+    }
+
+    // TODO: add a way to rename `output`.
+    /// Run some JavaScript. Return's a [`Vec<u8>`] containing whatever is sent through the
+    /// "`output`" function in the JavaScript process. This is like [`Repl::run`] except it gets
+    /// the result from TCP socket instead of stdout.
+    #[cfg(feature = "socket")]
+    pub async fn run_tcp<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
+        let code = code.as_ref();
+        let code = [
+            b";(async () =>{\n",
+            code.as_bytes(),
+            b"; output('",
+            &self.eof,
+            b"');",
+            b"})();",
+        ]
+        .concat();
+        self.stdin.write_all(&code).await?;
+        let res = pull_result_from_tcp(&mut self.socket, &self.eof).await;
+        if let Err(e) = &res && let Error::IoError(ioerr) = e && std::io::ErrorKind::UnexpectedEof == ioerr.kind() {
+            // log stderr
+            let stderr = self.drain_stderr().await?;
+            let stdout = self.drain_stdout().await?;
+            let stderr = String::from_utf8_lossy(&stderr);
+            let stdout = String::from_utf8_lossy(&stdout);
+            eprintln!("Repl.run_tcp failed.
+>>>>>>>>>> STDOUT >>>>>>>>>>
+stdout:\n{stdout}
+<<<<<<<< END STDOUT <<<<<<<<
+>>>>>>>>>> STDERR >>>>>>>>>>
+stderr:\n{stderr}
+<<<<<<<< END STDERR <<<<<<<<
+");
+            Err(Error::RunTcpError(stderr.to_string()))
+
+        } else {
+            res
+        }
+    }
+
+    /// Print stdout & stderr and return them.
+    pub async fn print(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let stderr = self.drain_stderr().await?;
+        if !stderr.is_empty() {
+            println!("stderr: {}", String::from_utf8(stderr.clone())?);
+        }
+        let stdout = self.drain_stdout().await?;
+        if !stdout.is_empty() {
+            println!("stdout: {}", String::from_utf8(stdout.clone())?);
+        }
+        if stderr.is_empty() && stdout.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((stdout, stderr)))
+        }
+    }
+
+    /// Print JS stdout & stderr until there is nothing left to print
+    pub async fn print_until_settled(&mut self) -> Result<()> {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while self.print().await?.is_some() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(())
+    }
+    /// Run some JavaScript. Returns whatever is through Node's `stdout`.
+    pub async fn str_run<S: AsRef<str>>(&mut self, code: S) -> Result<String> {
+        Ok(String::from_utf8(self.run(code).await?)?)
     }
 
     #[cfg(feature = "serde")]
@@ -292,6 +378,25 @@ impl Repl {
     ) -> Result<T> {
         let result = self.run(code).await?;
         Ok(serde_json::from_str(&String::from_utf8(result)?)?)
+    }
+
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn json_run_tcp<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+        &mut self,
+        code: S,
+    ) -> Result<T> {
+        let result = self.run_tcp(code).await?;
+        Ok(serde_json::from_str(&String::from_utf8(result)?)?)
+    }
+
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn get_name<T: serde::de::DeserializeOwned, S: std::fmt::Display>(
+        &mut self,
+        name: S,
+    ) -> Result<T> {
+        self.json_run_tcp(format!("outputJson(await {name})")).await
     }
 
     /// Stop the REPL.
@@ -323,44 +428,15 @@ async fn pull_result_from_stdout(stdout: &mut Bytes<ChildStdout>, eof: &[u8]) ->
     buff
 }
 
-#[derive(thiserror::Error, Debug)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("Rust side error creating rs to js socket: {0}")]
-    RsSocketFail(JoinError),
-    #[error("Error building rust to javascript stream")]
-    RsJsStreamConfBad(#[from] pipe::RsJsStreamBuilderError),
-    #[error("cp command failed: code {0:?} msg: {1}")]
-    CommandFailed(Option<i32>, String),
-    #[error("IoError: {0}")]
-    IoError(#[from] std::io::Error),
-    #[error("Ut8Error: {0}")]
-    Utf8Error(#[from] FromUtf8Error),
-    #[cfg(feature = "serde")]
-    #[error("serde_json::Error: {0}")]
-    SerdeJsonError(#[from] serde_json::Error),
-    #[error("Error building config: {0}")]
-    ConfigBuilderError(#[from] ConfigBuilderError),
-    #[error("Repl failed to start. This could be an issue with imports: {0:?}")]
-    FailedToStart(async_process::Child),
-    #[error("Repl got an error running your code")]
-    RunError,
-    #[cfg(feature = "integration_utils")]
-    #[error("Error from integration utils")]
-    IntegrationUtils(#[from] integration_utils::Error),
-}
-
-type Result<T> = core::result::Result<T, Error>;
-
 #[cfg(test)]
 mod test {
     use super::*;
     #[tokio::test]
-    async fn read_eval_print_macro_works() -> Result<()> {
-        let mut context: Repl = Config::build()?.start().await?;
-        let result = context.run("console.log('Hello, world!');").await?;
+    async fn read_eval_print_works() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("console.log('Hello, world!');").await?;
         assert_eq!(result, b"Hello, world!\n");
-        let result = context
+        let result = repl
             .run(
                 "
 a = 66;
@@ -371,11 +447,36 @@ process.stdout.write(`${b}`);
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = context.run("process.stdout.write(`${c}`)").await?;
+        let result = repl.run("process.stdout.write(`${c}`)").await?;
         assert_eq!(result, b"77");
 
-        let _result = context.stop().await?;
-        let _ = context.child.output().await?;
+        let _result = repl.stop().await?;
+        let _ = repl.child.output().await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "socket")]
+    #[tokio::test]
+    async fn test_run_tcp() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("console.log('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!\n");
+        let result = repl
+            .run_tcp(
+                "
+a = 66;
+b = 7 + a;
+c = 77;
+output(`${b}`);
+",
+            )
+            .await?;
+        assert_eq!(result, b"73");
+        let result = repl.run_tcp("output(`${c}`)").await?;
+        assert_eq!(result, b"77");
+
+        let _result = repl.stop().await?;
+        let _ = repl.child.output().await?;
         Ok(())
     }
 }
