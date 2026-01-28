@@ -5,8 +5,8 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 # tokio_test::block_on(async {
 # use rusty_nodejs_repl::{Repl, Config, Error};
 let mut repl: Repl = Config::build()?.start().await?;
-let result = repl.run("console.log('Hello, world!');").await?;
-assert_eq!(result, b"Hello, world!\n");
+let result = repl.run("output('Hello, world!');").await?;
+assert_eq!(result, b"Hello, world!");
 repl.stop().await?;
 # Ok::<(),Error>(())
 # }).unwrap();
@@ -21,13 +21,13 @@ pub mod integration_utils;
 pub mod pipe;
 
 use async_process::{ChildStdout, Stdio};
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use futures_lite::{AsyncReadExt, AsyncWriteExt, Stream, StreamExt, io::Bytes};
 use std::{fs::File, io::Write, process::Command, time::Duration};
 use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::error;
 
-use crate::pipe::{pull_result_from_tcp, IoConfig, IoConfigBuilder};
+use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_tcp};
 pub use error::{Error, Result};
 
 const REPL_JS: &str = include_str!("./repl.js");
@@ -38,6 +38,8 @@ const DEFAULT_NODE_BINARY: &str = "node";
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 const DEFAULT_READBUFF_TIMEOUT: Duration = Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS);
+
+const REPL_READY: &str = "repl_ready";
 
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 
@@ -195,8 +197,6 @@ impl Config {
     }
 }
 
-const REPL_READY: &str = "repl_ready";
-
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
     let node_env = conf
         .path_to_node_modules
@@ -278,35 +278,12 @@ impl Repl {
         Ok(read_with_timeout(&mut self.stdout, DEFAULT_READBUFF_TIMEOUT).await)
     }
 
-    /// Run some JavaScript. Returns a [`Vec<u8>`] containing whatever is sent through the JavaScript
-    /// processes stdout.
-    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
-        let code = code.as_ref();
-        let code = [
-            b";(async () =>{\n",
-            code.as_bytes(),
-            b"; process.stdout.write('",
-            &self.eof,
-            b"');",
-            b"})();",
-        ]
-        .concat();
-        self.stdin.write_all(&code).await?;
-        let errs = read_with_timeout(&mut self.stderr, DEFAULT_READBUFF_TIMEOUT).await;
-        if !errs.is_empty() {
-            let estr = String::from_utf8_lossy(&errs);
-            error!("{}", estr);
-            return Err(Error::RunError);
-        }
-        Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
-    }
-
     // TODO: add a way to rename `output`.
     /// Run some JavaScript. Return's a [`Vec<u8>`] containing whatever is sent through the
     /// "`output`" function in the JavaScript process. This is like [`Repl::run`] except it gets
     /// the result from TCP socket instead of stdout.
     #[cfg(feature = "socket")]
-    pub async fn run_tcp<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
+    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
         let code = code.as_ref();
         let code = [
             b";(async () =>{\n",
@@ -317,24 +294,31 @@ impl Repl {
             b"})();",
         ]
         .concat();
+        dbg!();
         self.stdin.write_all(&code).await?;
+        dbg!();
         let res = pull_result_from_tcp(&mut self.socket, &self.eof).await;
-        if let Err(e) = &res && let Error::IoError(ioerr) = e && std::io::ErrorKind::UnexpectedEof == ioerr.kind() {
+        dbg!();
+        if let Err(e) = &res
+            && let Error::IoError(ioerr) = e
+            && std::io::ErrorKind::UnexpectedEof == ioerr.kind()
+        {
             // log stderr
             let stderr = self.drain_stderr().await?;
             let stdout = self.drain_stdout().await?;
             let stderr = String::from_utf8_lossy(&stderr);
             let stdout = String::from_utf8_lossy(&stdout);
-            eprintln!("Repl.run_tcp failed.
+            eprintln!(
+                "Repl.run_tcp failed.
 >>>>>>>>>> STDOUT >>>>>>>>>>
 stdout:\n{stdout}
 <<<<<<<< END STDOUT <<<<<<<<
 >>>>>>>>>> STDERR >>>>>>>>>>
 stderr:\n{stderr}
 <<<<<<<< END STDERR <<<<<<<<
-");
+"
+            );
             Err(Error::RunTcpError(stderr.to_string()))
-
         } else {
             res
         }
@@ -386,7 +370,7 @@ stderr:\n{stderr}
         &mut self,
         code: S,
     ) -> Result<T> {
-        let result = self.run_tcp(code).await?;
+        let result = self.run(code).await?;
         Ok(serde_json::from_str(&String::from_utf8(result)?)?)
     }
 
@@ -434,20 +418,20 @@ mod test {
     #[tokio::test]
     async fn read_eval_print_works() -> Result<()> {
         let mut repl: Repl = Config::build()?.start().await?;
-        let result = repl.run("console.log('Hello, world!');").await?;
-        assert_eq!(result, b"Hello, world!\n");
+        let result = repl.run("output('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!");
         let result = repl
             .run(
                 "
 a = 66;
 b = 7 + a;
 c = 77;
-process.stdout.write(`${b}`);
+output(`${b}`);
 ",
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = repl.run("process.stdout.write(`${c}`)").await?;
+        let result = repl.run("output(`${c}`)").await?;
         assert_eq!(result, b"77");
 
         let _result = repl.stop().await?;
@@ -459,10 +443,10 @@ process.stdout.write(`${b}`);
     #[tokio::test]
     async fn test_run_tcp() -> Result<()> {
         let mut repl: Repl = Config::build()?.start().await?;
-        let result = repl.run("console.log('Hello, world!');").await?;
-        assert_eq!(result, b"Hello, world!\n");
+        let result = repl.run("output('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!");
         let result = repl
-            .run_tcp(
+            .run(
                 "
 a = 66;
 b = 7 + a;
@@ -472,7 +456,7 @@ output(`${b}`);
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = repl.run_tcp("output(`${c}`)").await?;
+        let result = repl.run("output(`${c}`)").await?;
         assert_eq!(result, b"77");
 
         let _result = repl.stop().await?;
