@@ -14,10 +14,11 @@ This is a breaking change due `Repl.run` changing. To output data you must now p
 ### Added
 
 * New unit tests: error handling for syntax errors, `Config::imports`, `Config::before`, `str_run`, empty output, binary data through socket, `fmt_rs_vec_u8_as_js_buf` helper, and custom EOF delimiter
+* `outputJson` is now in the JavaScript scope. It's just `(x) => s.write(JSON.stringify(x))`
 
 ### Changed
 
-* `Repl::run` now uses TCP socket by default
+* `Repl::run` and `Repl::json_run` now uses TCP socket by default
 * Fixed bug where `Config` imports/before/after with single items were missing trailing semicolons
 
 ### Removed
