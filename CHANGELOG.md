@@ -9,9 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+This is a breaking change due `Repl.run` changing. To output data you must now pass it through the JavaScript `output` function, instead of via stdout. This passes the data through a TCP socket, and prevents spurious `console.logs` from effecting the data you are trying to read.
+
 ### Added
 
+* New unit tests: error handling for syntax errors, `Config::imports`, `Config::before`, `str_run`, empty output, binary data through socket, `fmt_rs_vec_u8_as_js_buf` helper, and custom EOF delimiter
+
 ### Changed
+
+* `Repl::run` now uses TCP socket by default
+* Fixed bug where `Config` imports/before/after with single items were missing trailing semicolons
 
 ### Removed
 
