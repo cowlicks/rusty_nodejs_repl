@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+### Changed
+
+### Removed
+
+
+
+## [0.3.0] - 2026-01-30
+
 This is a breaking change due `Repl.run` changing. To output data you must now pass it through the JavaScript `output` function, instead of via stdout. This passes the data through a TCP socket, and prevents spurious `console.logs` from effecting the data you are trying to read.
 
 ### Added
@@ -87,7 +97,8 @@ Rename `Repl::repl` to `Repl::run`.
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.1.2...v0.2.0
