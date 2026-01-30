@@ -107,6 +107,10 @@ fn fmt_rs_vec_u8_as_js_buf(bytes: &[u8]) -> String {
     format!("Buffer.from([{s}])")
 }
 
+fn add_semis_to_ensure_js_statement(statements: &[String]) -> Vec<String> {
+    statements.iter().map(|s| format!("{s};")).collect()
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -167,8 +171,8 @@ impl Config {
     }
 
     fn build_script(&self) -> String {
-        let import_str = self.imports.join(";\n");
-        let before_str = self.before.join(";\n");
+        let import_str = add_semis_to_ensure_js_statement(&self.imports).join("\n");
+        let before_str = add_semis_to_ensure_js_statement(&self.before).join("\n");
         let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
         let after_str = after_str.join(";\n");
         let eof_buf = fmt_rs_vec_u8_as_js_buf(&self.eof);
@@ -294,11 +298,8 @@ impl Repl {
             b"})();",
         ]
         .concat();
-        dbg!();
         self.stdin.write_all(&code).await?;
-        dbg!();
         let res = pull_result_from_socket(&mut self.socket, &self.eof).await;
-        dbg!();
         if let Err(e) = &res
             && let Error::IoError(ioerr) = e
             && std::io::ErrorKind::UnexpectedEof == ioerr.kind()
@@ -461,6 +462,80 @@ output(`${b}`);
 
         let _result = repl.stop().await?;
         let _ = repl.child.output().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_with_syntax_error() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output(syntax error here").await;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_imports_work() -> Result<()> {
+        let mut conf = ConfigBuilder::default()
+            .imports(vec!["var path = require('path')".to_string()])
+            .build()?;
+        let mut repl = conf.start().await?;
+        let result = repl
+            .str_run("output(path.basename('/foo/bar.txt'))")
+            .await?;
+        assert_eq!(result, "bar.txt");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_before_runs() -> Result<()> {
+        let mut conf = ConfigBuilder::default()
+            .before(vec!["globalThis.setupValue = 42".to_string()])
+            .build()?;
+        let mut repl = conf.start().await?;
+        let result = repl.str_run("output(`${setupValue}`)").await?;
+        assert_eq!(result, "42");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn str_run_returns_string() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result: String = repl.str_run("output('hello')").await?;
+        assert_eq!(result, "hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_output() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output('')").await?;
+        assert_eq!(result, b"");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn binary_data_through_socket() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output(Buffer.from([0, 255, 128]))").await?;
+        assert_eq!(result, vec![0u8, 255, 128]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_rs_vec_u8_as_js_buf() {
+        assert_eq!(
+            fmt_rs_vec_u8_as_js_buf(&[1, 2, 3]),
+            "Buffer.from([1, 2, 3])"
+        );
+        assert_eq!(fmt_rs_vec_u8_as_js_buf(&[]), "Buffer.from([])");
+    }
+
+    #[tokio::test]
+    async fn custom_eof_delimiter() -> Result<()> {
+        let mut conf = ConfigBuilder::default().eof(b"DONE".to_vec()).build()?;
+        let mut repl = conf.start().await?;
+        let result = repl.run("output('test')").await?;
+        assert_eq!(result, b"test");
         Ok(())
     }
 }
