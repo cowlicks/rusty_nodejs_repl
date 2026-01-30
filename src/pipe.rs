@@ -21,7 +21,10 @@ pub const DEFAULT_JS_SOCKET_NAME: &str = "socket";
 pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "(s) => {
     output = (x) => {
         s.write(x);
-    }
+    };
+    outputJson = (x) => {
+        s.write(JSON.stringify(x));
+    };
 }";
 /// Default # of milliseconds that wait macro waits
 pub const DEFAULT_WAIT_MILLIS: u64 = 100;
@@ -148,7 +151,7 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &IoConfig) -> Result<TcpStrea
 /// Read from the provided [`TcpStream`] until we read the value of the `eof` argument`. Return all
 /// data read before `eof`.
 #[instrument(skip_all, err)]
-pub async fn pull_result_from_tcp(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
+pub async fn pull_result_from_socket(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
     let mut buff = vec![];
     let mut byte = [0u8; 1];
 
@@ -192,32 +195,6 @@ mod test {
         assert_eq!(out, b"echo hello and back");
         Ok(())
     }
-    #[tokio::test]
-    async fn test_start_server_and_make_js_code() -> Result<()> {
-        // create the stream. On the JS end, read from the socket and send it back
-        let conf = IoConfigBuilder::default().build()?;
-        let (on_socket, (setup, _teardown)) = conf.start_server_and_make_js_code().await?;
-
-        let mut repl: Repl = Config::build()?.start().await?;
-
-        let eof = "abc";
-        let _ = repl.run(&setup).await?;
-        let mut stream = on_socket.await?;
-
-        let x = repl
-            .run(format!(
-                "
-console.log('24');
-output('69{eof}');
-"
-            ))
-            .await?;
-        assert_eq!(x, b"24\n");
-        let result = pull_result_from_tcp(&mut stream, eof.as_bytes()).await?;
-        assert_eq!(result, b"69");
-        Ok(())
-    }
-
     mod macros {
         //! Putting this macro in it's own module so that we can test that it is not implicitly
         //! relying on context

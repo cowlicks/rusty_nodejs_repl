@@ -5,8 +5,8 @@ Use [`Config`] to setup the REPL and use [`Repl`] to interact with it.
 # tokio_test::block_on(async {
 # use rusty_nodejs_repl::{Repl, Config, Error};
 let mut repl: Repl = Config::build()?.start().await?;
-let result = repl.run("console.log('Hello, world!');").await?;
-assert_eq!(result, b"Hello, world!\n");
+let result = repl.run("output('Hello, world!');").await?;
+assert_eq!(result, b"Hello, world!");
 repl.stop().await?;
 # Ok::<(),Error>(())
 # }).unwrap();
@@ -21,13 +21,13 @@ pub mod integration_utils;
 pub mod pipe;
 
 use async_process::{ChildStdout, Stdio};
-use futures_lite::{io::Bytes, AsyncReadExt, AsyncWriteExt, Stream, StreamExt};
+use futures_lite::{AsyncReadExt, AsyncWriteExt, Stream, StreamExt, io::Bytes};
 use std::{fs::File, io::Write, process::Command, time::Duration};
 use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::error;
 
-use crate::pipe::{pull_result_from_tcp, IoConfig, IoConfigBuilder};
+use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_socket};
 pub use error::{Error, Result};
 
 const REPL_JS: &str = include_str!("./repl.js");
@@ -38,6 +38,8 @@ const DEFAULT_NODE_BINARY: &str = "node";
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 const DEFAULT_READBUFF_TIMEOUT: Duration = Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS);
+
+const REPL_READY: &str = "repl_ready";
 
 type BuildCommand = dyn Fn(&Config, &str, &str) -> String;
 
@@ -105,6 +107,10 @@ fn fmt_rs_vec_u8_as_js_buf(bytes: &[u8]) -> String {
     format!("Buffer.from([{s}])")
 }
 
+fn add_semis_to_ensure_js_statement(statements: &[String]) -> Vec<String> {
+    statements.iter().map(|s| format!("{s};")).collect()
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -165,8 +171,8 @@ impl Config {
     }
 
     fn build_script(&self) -> String {
-        let import_str = self.imports.join(";\n");
-        let before_str = self.before.join(";\n");
+        let import_str = add_semis_to_ensure_js_statement(&self.imports).join("\n");
+        let before_str = add_semis_to_ensure_js_statement(&self.before).join("\n");
         let after_str: Vec<String> = self.after.clone().into_iter().rev().collect();
         let after_str = after_str.join(";\n");
         let eof_buf = fmt_rs_vec_u8_as_js_buf(&self.eof);
@@ -194,8 +200,6 @@ impl Config {
         out
     }
 }
-
-const REPL_READY: &str = "repl_ready";
 
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
     let node_env = conf
@@ -278,35 +282,12 @@ impl Repl {
         Ok(read_with_timeout(&mut self.stdout, DEFAULT_READBUFF_TIMEOUT).await)
     }
 
-    /// Run some JavaScript. Returns a [`Vec<u8>`] containing whatever is sent through the JavaScript
-    /// processes stdout.
-    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
-        let code = code.as_ref();
-        let code = [
-            b";(async () =>{\n",
-            code.as_bytes(),
-            b"; process.stdout.write('",
-            &self.eof,
-            b"');",
-            b"})();",
-        ]
-        .concat();
-        self.stdin.write_all(&code).await?;
-        let errs = read_with_timeout(&mut self.stderr, DEFAULT_READBUFF_TIMEOUT).await;
-        if !errs.is_empty() {
-            let estr = String::from_utf8_lossy(&errs);
-            error!("{}", estr);
-            return Err(Error::RunError);
-        }
-        Ok(pull_result_from_stdout(&mut self.stdout, &self.eof).await)
-    }
-
     // TODO: add a way to rename `output`.
     /// Run some JavaScript. Return's a [`Vec<u8>`] containing whatever is sent through the
     /// "`output`" function in the JavaScript process. This is like [`Repl::run`] except it gets
     /// the result from TCP socket instead of stdout.
     #[cfg(feature = "socket")]
-    pub async fn run_tcp<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
+    pub async fn run<S: AsRef<str>>(&mut self, code: S) -> Result<Vec<u8>> {
         let code = code.as_ref();
         let code = [
             b";(async () =>{\n",
@@ -318,23 +299,27 @@ impl Repl {
         ]
         .concat();
         self.stdin.write_all(&code).await?;
-        let res = pull_result_from_tcp(&mut self.socket, &self.eof).await;
-        if let Err(e) = &res && let Error::IoError(ioerr) = e && std::io::ErrorKind::UnexpectedEof == ioerr.kind() {
+        let res = pull_result_from_socket(&mut self.socket, &self.eof).await;
+        if let Err(e) = &res
+            && let Error::IoError(ioerr) = e
+            && std::io::ErrorKind::UnexpectedEof == ioerr.kind()
+        {
             // log stderr
             let stderr = self.drain_stderr().await?;
             let stdout = self.drain_stdout().await?;
             let stderr = String::from_utf8_lossy(&stderr);
             let stdout = String::from_utf8_lossy(&stdout);
-            eprintln!("Repl.run_tcp failed.
+            eprintln!(
+                "Repl.run failed.
 >>>>>>>>>> STDOUT >>>>>>>>>>
 stdout:\n{stdout}
 <<<<<<<< END STDOUT <<<<<<<<
 >>>>>>>>>> STDERR >>>>>>>>>>
 stderr:\n{stderr}
 <<<<<<<< END STDERR <<<<<<<<
-");
+"
+            );
             Err(Error::RunTcpError(stderr.to_string()))
-
         } else {
             res
         }
@@ -372,6 +357,16 @@ stderr:\n{stderr}
 
     #[cfg(feature = "serde")]
     /// Run some JavaScript. Deserialize stdout into `T`.
+    pub async fn json_run_old<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+        &mut self,
+        code: S,
+    ) -> Result<T> {
+        let result = self.run(code).await?;
+        Ok(serde_json::from_str(&String::from_utf8(result)?)?)
+    }
+
+    #[cfg(feature = "serde")]
+    /// Run some JavaScript. Deserialize stdout into `T`.
     pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
         &mut self,
         code: S,
@@ -382,21 +377,11 @@ stderr:\n{stderr}
 
     #[cfg(feature = "serde")]
     /// Run some JavaScript. Deserialize stdout into `T`.
-    pub async fn json_run_tcp<T: serde::de::DeserializeOwned, S: AsRef<str>>(
-        &mut self,
-        code: S,
-    ) -> Result<T> {
-        let result = self.run_tcp(code).await?;
-        Ok(serde_json::from_str(&String::from_utf8(result)?)?)
-    }
-
-    #[cfg(feature = "serde")]
-    /// Run some JavaScript. Deserialize stdout into `T`.
     pub async fn get_name<T: serde::de::DeserializeOwned, S: std::fmt::Display>(
         &mut self,
         name: S,
     ) -> Result<T> {
-        self.json_run_tcp(format!("outputJson(await {name})")).await
+        self.json_run(format!("outputJson(await {name})")).await
     }
 
     /// Stop the REPL.
@@ -434,20 +419,20 @@ mod test {
     #[tokio::test]
     async fn read_eval_print_works() -> Result<()> {
         let mut repl: Repl = Config::build()?.start().await?;
-        let result = repl.run("console.log('Hello, world!');").await?;
-        assert_eq!(result, b"Hello, world!\n");
+        let result = repl.run("output('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!");
         let result = repl
             .run(
                 "
 a = 66;
 b = 7 + a;
 c = 77;
-process.stdout.write(`${b}`);
+output(`${b}`);
 ",
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = repl.run("process.stdout.write(`${c}`)").await?;
+        let result = repl.run("output(`${c}`)").await?;
         assert_eq!(result, b"77");
 
         let _result = repl.stop().await?;
@@ -459,10 +444,10 @@ process.stdout.write(`${b}`);
     #[tokio::test]
     async fn test_run_tcp() -> Result<()> {
         let mut repl: Repl = Config::build()?.start().await?;
-        let result = repl.run("console.log('Hello, world!');").await?;
-        assert_eq!(result, b"Hello, world!\n");
+        let result = repl.run("output('Hello, world!');").await?;
+        assert_eq!(result, b"Hello, world!");
         let result = repl
-            .run_tcp(
+            .run(
                 "
 a = 66;
 b = 7 + a;
@@ -472,11 +457,106 @@ output(`${b}`);
             )
             .await?;
         assert_eq!(result, b"73");
-        let result = repl.run_tcp("output(`${c}`)").await?;
+        let result = repl.run("output(`${c}`)").await?;
         assert_eq!(result, b"77");
 
         let _result = repl.stop().await?;
         let _ = repl.child.output().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_with_syntax_error() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output(syntax error here").await;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_imports_work() -> Result<()> {
+        let mut conf = ConfigBuilder::default()
+            .imports(vec!["var path = require('path')".to_string()])
+            .build()?;
+        let mut repl = conf.start().await?;
+        let result = repl
+            .str_run("output(path.basename('/foo/bar.txt'))")
+            .await?;
+        assert_eq!(result, "bar.txt");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_before_runs() -> Result<()> {
+        let mut conf = ConfigBuilder::default()
+            .before(vec!["globalThis.setupValue = 42".to_string()])
+            .build()?;
+        let mut repl = conf.start().await?;
+        let result = repl.str_run("output(`${setupValue}`)").await?;
+        assert_eq!(result, "42");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn str_run_returns_string() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result: String = repl.str_run("output('hello')").await?;
+        assert_eq!(result, "hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_output() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output('')").await?;
+        assert_eq!(result, b"");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn binary_data_through_socket() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result = repl.run("output(Buffer.from([0, 255, 128]))").await?;
+        assert_eq!(result, vec![0u8, 255, 128]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_rs_vec_u8_as_js_buf() {
+        assert_eq!(
+            fmt_rs_vec_u8_as_js_buf(&[1, 2, 3]),
+            "Buffer.from([1, 2, 3])"
+        );
+        assert_eq!(fmt_rs_vec_u8_as_js_buf(&[]), "Buffer.from([])");
+    }
+
+    #[tokio::test]
+    async fn custom_eof_delimiter() -> Result<()> {
+        let mut conf = ConfigBuilder::default().eof(b"DONE".to_vec()).build()?;
+        let mut repl = conf.start().await?;
+        let result = repl.run("output('test')").await?;
+        assert_eq!(result, b"test");
+        Ok(())
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn get_name_deserializes_js_value() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        repl.run("globalThis.testObj = { name: 'alice', age: 30 }")
+            .await?;
+        let result: serde_json::Value = repl.get_name("testObj").await?;
+        assert_eq!(result["name"], "alice");
+        assert_eq!(result["age"], 30);
+        Ok(())
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn json_run_deserializes_result() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result: Vec<i32> = repl.json_run("outputJson([1, 2, 3])").await?;
+        assert_eq!(result, vec![1, 2, 3]);
         Ok(())
     }
 }
