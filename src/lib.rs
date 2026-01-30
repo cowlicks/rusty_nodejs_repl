@@ -538,4 +538,25 @@ output(`${b}`);
         assert_eq!(result, b"test");
         Ok(())
     }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn get_name_deserializes_js_value() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        repl.run("globalThis.testObj = { name: 'alice', age: 30 }")
+            .await?;
+        let result: serde_json::Value = repl.get_name("testObj").await?;
+        assert_eq!(result["name"], "alice");
+        assert_eq!(result["age"], 30);
+        Ok(())
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn json_run_deserializes_result() -> Result<()> {
+        let mut repl: Repl = Config::build()?.start().await?;
+        let result: Vec<i32> = repl.json_run("outputJson([1, 2, 3])").await?;
+        assert_eq!(result, vec![1, 2, 3]);
+        Ok(())
+    }
 }

@@ -21,7 +21,10 @@ pub const DEFAULT_JS_SOCKET_NAME: &str = "socket";
 pub const DEFAULT_JS_AFTER_SOCKET_CODE: &str = "(s) => {
     output = (x) => {
         s.write(x);
-    }
+    };
+    outputJson = (x) => {
+        s.write(JSON.stringify(x));
+    };
 }";
 /// Default # of milliseconds that wait macro waits
 pub const DEFAULT_WAIT_MILLIS: u64 = 100;
