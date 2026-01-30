@@ -148,7 +148,7 @@ pub async fn rust_js_stream(repl: &mut Repl, conf: &IoConfig) -> Result<TcpStrea
 /// Read from the provided [`TcpStream`] until we read the value of the `eof` argument`. Return all
 /// data read before `eof`.
 #[instrument(skip_all, err)]
-pub async fn pull_result_from_tcp(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
+pub async fn pull_result_from_socket(stream: &mut TcpStream, eof: &[u8]) -> Result<Vec<u8>> {
     let mut buff = vec![];
     let mut byte = [0u8; 1];
 
@@ -212,8 +212,10 @@ output('69{eof}');
 "
             ))
             .await?;
+        dbg!();
         assert_eq!(x, b"24\n");
-        let result = pull_result_from_tcp(&mut stream, eof.as_bytes()).await?;
+        dbg!();
+        let result = pull_result_from_socket(&mut stream, eof.as_bytes()).await?;
         assert_eq!(result, b"69");
         Ok(())
     }

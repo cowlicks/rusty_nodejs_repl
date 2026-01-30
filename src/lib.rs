@@ -27,7 +27,7 @@ use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
 use tracing::error;
 
-use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_tcp};
+use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_socket};
 pub use error::{Error, Result};
 
 const REPL_JS: &str = include_str!("./repl.js");
@@ -297,7 +297,7 @@ impl Repl {
         dbg!();
         self.stdin.write_all(&code).await?;
         dbg!();
-        let res = pull_result_from_tcp(&mut self.socket, &self.eof).await;
+        let res = pull_result_from_socket(&mut self.socket, &self.eof).await;
         dbg!();
         if let Err(e) = &res
             && let Error::IoError(ioerr) = e
@@ -309,7 +309,7 @@ impl Repl {
             let stderr = String::from_utf8_lossy(&stderr);
             let stdout = String::from_utf8_lossy(&stdout);
             eprintln!(
-                "Repl.run_tcp failed.
+                "Repl.run failed.
 >>>>>>>>>> STDOUT >>>>>>>>>>
 stdout:\n{stdout}
 <<<<<<<< END STDOUT <<<<<<<<
@@ -356,7 +356,7 @@ stderr:\n{stderr}
 
     #[cfg(feature = "serde")]
     /// Run some JavaScript. Deserialize stdout into `T`.
-    pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+    pub async fn json_run_old<T: serde::de::DeserializeOwned, S: AsRef<str>>(
         &mut self,
         code: S,
     ) -> Result<T> {
@@ -366,7 +366,7 @@ stderr:\n{stderr}
 
     #[cfg(feature = "serde")]
     /// Run some JavaScript. Deserialize stdout into `T`.
-    pub async fn json_run_tcp<T: serde::de::DeserializeOwned, S: AsRef<str>>(
+    pub async fn json_run<T: serde::de::DeserializeOwned, S: AsRef<str>>(
         &mut self,
         code: S,
     ) -> Result<T> {
@@ -380,7 +380,7 @@ stderr:\n{stderr}
         &mut self,
         name: S,
     ) -> Result<T> {
-        self.json_run_tcp(format!("outputJson(await {name})")).await
+        self.json_run(format!("outputJson(await {name})")).await
     }
 
     /// Stop the REPL.
