@@ -42,7 +42,7 @@ pub fn log() {
     static START_LOGS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     START_LOGS.get_or_init(|| {
         use tracing_subscriber::{
-            layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter,
+            EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
         };
         let env_filter = EnvFilter::from_default_env(); // Reads `RUST_LOG` environment variable
 
