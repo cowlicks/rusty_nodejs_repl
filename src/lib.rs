@@ -149,7 +149,7 @@ impl Config {
         let mut stderr = child.stderr.take().unwrap().bytes();
         let mut stdout = child.stdout.take().unwrap().bytes();
         let read_res = pull_result_from_stdout(&mut stdout, &self.eof).await;
-        if String::from_utf8_lossy(&read_res) != REPL_READY {
+        if !String::from_utf8_lossy(&read_res).contains(REPL_READY) {
             return Err(Error::FailedToStart(child));
         }
         let errs = read_with_timeout(&mut stderr, DEFAULT_READBUFF_TIMEOUT).await;
