@@ -1,7 +1,12 @@
 //! As this crate is intended for testing. I found it useful to include a few things related to
 //! integration testing.
 
-use std::process::Command;
+use std::{
+    process::{Command, Output},
+    sync::OnceLock,
+};
+
+use tracing_subscriber::EnvFilter;
 
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
@@ -10,6 +15,8 @@ pub enum Error {
     IoError(#[from] std::io::Error),
     #[error("Ut8Error: {0}")]
     Utf8Error(#[from] std::string::FromUtf8Error),
+    #[error("Non-zero status code returned from command")]
+    NonZeroStatusCodeFromCommand(String),
 }
 
 #[macro_export]
@@ -37,6 +44,29 @@ pub fn git_root() -> Result<String, Error> {
     Ok(String::from_utf8(x.stdout)?.trim().to_string())
 }
 
+/// Turn [`std::process::Output`] into a an Error if the status code != 0.
+pub fn check_cmd_output(out: Output) -> Result<Output, Error> {
+    if out.status.code() != Some(0) {
+        return Err(Error::NonZeroStatusCodeFromCommand(format!(
+            "comand output status was not zero. Got:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )));
+    }
+    Ok(out)
+}
+
+/// Run's `make` with the given argument in the given directory.
+/// The direcory should be relative to the root of the `git` repo.
+/// `make` is run with a lock-file to avoid problems with it being run in parallel.
+pub fn run_make(makefile_directory: &str, arg: &str) -> Result<Output, Error> {
+    let path = join_paths!(git_root()?, makefile_directory);
+    let cmd = format!("cd {path} && flock make.lock make {arg} && rm -f make.lock ");
+    let cmd_res = Command::new("sh").arg("-c").arg(cmd).output()?;
+    let out = check_cmd_output(cmd_res)?;
+    Ok(out)
+}
+
 /// Intialize logging
 pub fn log() {
     static START_LOGS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -45,6 +75,15 @@ pub fn log() {
             EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
         };
         let env_filter = EnvFilter::from_default_env(); // Reads `RUST_LOG` environment variable
+        //tracing_subscriber::fmt()
+        //    .with_target(true)
+        //    .with_line_number(true)
+        //    // print when instrumented funtion enters
+        //    //.with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
+        //    .with_file(true)
+        //    .with_env_filter(EnvFilter::from_default_env()) // Reads `RUST_LOG` environment variable
+        //    .without_time()
+        //    .init();
 
         // Create the hierarchical layer from tracing_tree
         let tree_layer = tracing_tree::HierarchicalLayer::new(2) // 2 spaces per indent level
