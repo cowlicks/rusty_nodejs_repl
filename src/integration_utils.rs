@@ -1,12 +1,7 @@
 //! As this crate is intended for testing. I found it useful to include a few things related to
 //! integration testing.
 
-use std::{
-    process::{Command, Output},
-    sync::OnceLock,
-};
-
-use tracing_subscriber::EnvFilter;
+use std::process::{Command, Output};
 
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
