@@ -246,6 +246,9 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
+        // Without this, dropping the child - on a panicking test, an early `?`, or just
+        // forgetting to call `Repl::stop` - leaves Node.js running forever.
+        .kill_on_drop(true)
         .arg("-c")
         .arg(cmd)
         .spawn()?;
@@ -521,6 +524,34 @@ output(`${b}`);
         Ok(())
     }
 
+    /// `false` when the process is gone, or is a zombie waiting to be reaped.
+    #[cfg(unix)]
+    fn process_is_running(pid: u32) -> bool {
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            // "pid (comm) state ...". `comm` may contain spaces and parens, so scan from the end.
+            return match stat.rsplit_once(") ") {
+                Some((_, rest)) => !rest.starts_with('Z'),
+                None => false,
+            };
+        }
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn assert_process_stops(pid: u32) {
+        for _ in 0..100 {
+            if !process_is_running(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("process {pid} is still running");
+    }
+
     /// An interval keeps Node's event loop alive forever, so it can never exit on its own.
     fn config_that_never_exits() -> Result<Config> {
         Ok(ConfigBuilder::default()
@@ -528,6 +559,35 @@ output(`${b}`);
                 "globalThis.timer = setInterval(() => {}, 1000)".to_string(),
             ])
             .build()?)
+    }
+
+    /// The stdin watchdog is no help when the JS side won't react to it, so dropping the
+    /// [`Repl`] must kill Node.js outright.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_repl_kills_process_that_ignores_stdin() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        repl.run(
+            "process.stdin.removeAllListeners('end');
+             process.stdin.removeAllListeners('close');
+             output('')",
+        )
+        .await?;
+        let pid = repl.child.id();
+        drop(repl);
+        assert_process_stops(pid);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_repl_kills_process() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        let pid = repl.child.id();
+        repl.run("output('still here')").await?;
+        drop(repl);
+        assert_process_stops(pid);
+        Ok(())
     }
 
     /// Simulates the Rust process dying without cleaning up: Node.js sees EOF on stdin and
