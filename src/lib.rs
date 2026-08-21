@@ -219,7 +219,10 @@ fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str
     // `exec` so the shell replaces itself with Node.js. Otherwise the pid we hold is the
     // shell's, and killing it would leave Node.js orphaned.
     match &conf.path_to_node_modules {
-        Some(p) => format!("exec env NODE_PATH={p} {} {path_to_script}", conf.node_binary),
+        Some(p) => format!(
+            "exec env NODE_PATH={p} {} {path_to_script}",
+            conf.node_binary
+        ),
         None => format!("exec {} {path_to_script}", conf.node_binary),
     }
 }
@@ -230,7 +233,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     let script_path = working_dir.path().join(&conf.script_file_name);
     let script_file = File::create(&script_path)?;
 
-    write!(&script_file, "{}", &conf.build_script())?;
+    write!(&script_file, "{}", conf.build_script())?;
 
     let working_dir_path = working_dir.path().display().to_string();
     for dir in &conf.copy_dirs {
