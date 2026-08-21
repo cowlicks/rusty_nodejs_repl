@@ -22,10 +22,15 @@ pub mod pipe;
 
 use async_process::{ChildStdout, Stdio};
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Stream, StreamExt, io::Bytes};
-use std::{fs::File, io::Write, process::Command, time::Duration};
+use std::{
+    fs::File,
+    io::Write,
+    process::{Command, ExitStatus},
+    time::Duration,
+};
 use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_socket};
 pub use error::{Error, Result};
@@ -38,6 +43,9 @@ const DEFAULT_NODE_BINARY: &str = "node";
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 const DEFAULT_READBUFF_TIMEOUT: Duration = Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS);
+
+/// How long [`Repl::stop`] waits for Node.js to exit on its own before killing it.
+pub const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 const REPL_READY: &str = "repl_ready";
 
@@ -388,9 +396,36 @@ stderr:\n{stderr}
         self.json_run(format!("outputJson(await {name})")).await
     }
 
-    /// Stop the REPL.
+    /// Stop the REPL. This runs the [`Config::after`] teardown code, waits up to
+    /// [`DEFAULT_STOP_TIMEOUT`] for Node.js to exit, and kills it if it doesn't.
+    ///
+    /// Node.js only exits once its event loop is empty, so code that leaves handles open
+    /// (servers, sockets, timers) would otherwise keep the process alive forever.
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
-        self.run("queue.done();").await
+        let out = self.run("queue.done();").await;
+        // Kill it even when the run above failed - especially then.
+        self.wait_or_kill(DEFAULT_STOP_TIMEOUT).await?;
+        out
+    }
+
+    /// Wait up to `timeout` for Node.js to exit on its own, then kill it.
+    pub async fn wait_or_kill(&mut self, timeout_duration: Duration) -> Result<ExitStatus> {
+        match timeout(timeout_duration, self.child.status()).await {
+            Ok(status) => Ok(status?),
+            Err(_) => {
+                warn!(
+                    "Node.js did not exit within {timeout_duration:?}, killing it. \
+                     Its event loop probably still has open handles."
+                );
+                self.kill().await
+            }
+        }
+    }
+
+    /// Kill Node.js now, and wait for it to be reaped.
+    pub async fn kill(&mut self) -> Result<ExitStatus> {
+        self.child.kill()?;
+        Ok(self.child.status().await?)
     }
 }
 
@@ -560,6 +595,16 @@ output(`${b}`);
                 "globalThis.timer = setInterval(() => {}, 1000)".to_string(),
             ])
             .build()?)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_kills_process_that_will_not_exit() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        let pid = repl.child.id();
+        repl.stop().await?;
+        assert_process_stops(pid);
+        Ok(())
     }
 
     /// The stdin watchdog is no help when the JS side won't react to it, so dropping the
