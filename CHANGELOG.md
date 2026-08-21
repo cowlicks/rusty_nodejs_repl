@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+
+
+## [0.5.0] - 2026-08-21
+
+### Added
+
 - `Repl::kill` and `Repl::wait_or_kill` for ending the Node.js process directly.
 - `DEFAULT_STOP_TIMEOUT`, the grace period `Repl::stop` gives Node.js to exit on its own.
 
@@ -119,7 +129,8 @@ Rename `Repl::repl` to `Repl::run`.
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/cowlicks/rusty_nodejs_repl/compare/v0.2.1...v0.2.2
