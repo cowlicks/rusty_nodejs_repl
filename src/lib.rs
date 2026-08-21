@@ -12,6 +12,10 @@ repl.stop().await?;
 # }).unwrap();
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
+
+The Node.js process is killed when the [`Repl`] is dropped, so it can't outlive the Rust process
+that started it. [`Repl::stop`] is only needed when you want [`Config::after`] teardown code to
+run - it also kills Node.js if it doesn't exit within [`DEFAULT_STOP_TIMEOUT`].
 */
 #![warn(missing_debug_implementations, refining_impl_trait, missing_docs)]
 
@@ -265,6 +269,10 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
 }
 
 /// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
+///
+/// Dropping this kills the Node.js process, so it never outlives the Rust process that started
+/// it. As a last resort - if the Rust process dies without running destructors - the REPL script
+/// also exits on its own once stdin closes.
 #[derive(Debug)]
 pub struct Repl {
     /// Needs to be held until the working directory should be dropped.
