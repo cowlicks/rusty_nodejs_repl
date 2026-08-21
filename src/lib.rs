@@ -12,6 +12,10 @@ repl.stop().await?;
 # }).unwrap();
 ```
 The REPL is run in it's own [`tempfile::TempDir`]. So any files created alongside it will be cleaned up on exit.
+
+The Node.js process is killed when the [`Repl`] is dropped, so it can't outlive the Rust process
+that started it. [`Repl::stop`] is only needed when you want [`Config::after`] teardown code to
+run - it also kills Node.js if it doesn't exit within [`DEFAULT_STOP_TIMEOUT`].
 */
 #![warn(missing_debug_implementations, refining_impl_trait, missing_docs)]
 
@@ -22,10 +26,15 @@ pub mod pipe;
 
 use async_process::{ChildStdout, Stdio};
 use futures_lite::{AsyncReadExt, AsyncWriteExt, Stream, StreamExt, io::Bytes};
-use std::{fs::File, io::Write, process::Command, time::Duration};
+use std::{
+    fs::File,
+    io::Write,
+    process::{Command, ExitStatus},
+    time::Duration,
+};
 use tempfile::TempDir;
 use tokio::{net::TcpStream, time::timeout};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::pipe::{IoConfig, IoConfigBuilder, pull_result_from_socket};
 pub use error::{Error, Result};
@@ -38,6 +47,9 @@ const DEFAULT_NODE_BINARY: &str = "node";
 const DEFAULT_EOF: &[u8] = &[0, 1, 0];
 const DEFAULT_READBUFF_TIMEOUT_MS: u64 = 100;
 const DEFAULT_READBUFF_TIMEOUT: Duration = Duration::from_millis(DEFAULT_READBUFF_TIMEOUT_MS);
+
+/// How long [`Repl::stop`] waits for Node.js to exit on its own before killing it.
+pub const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 const REPL_READY: &str = "repl_ready";
 
@@ -82,7 +94,9 @@ pub struct Config {
     script_file_name: String,
     /// A function that constructs the shell script which runs the REPL.
     /// It is passed the config, the directory the REPL is run from, and the full path to the `script_file_name` file.
-    /// Result looks like: `NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
+    /// Result looks like: `exec env NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
+    /// The script is run with `sh -c`, so it should `exec` its final command. Otherwise the process
+    /// we hold is the shell, and killing it would leave Node.js running.
     build_command: Option<Box<BuildCommand>>,
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
@@ -202,13 +216,15 @@ impl Config {
 }
 
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
-    let node_env = conf
-        .path_to_node_modules
-        .as_ref()
-        .map(|p| format!("NODE_PATH={p}"))
-        .unwrap_or_default();
-
-    format!("{} {} {path_to_script}", node_env, conf.node_binary)
+    // `exec` so the shell replaces itself with Node.js. Otherwise the pid we hold is the
+    // shell's, and killing it would leave Node.js orphaned.
+    match &conf.path_to_node_modules {
+        Some(p) => format!(
+            "exec env NODE_PATH={p} {} {path_to_script}",
+            conf.node_binary
+        ),
+        None => format!("exec {} {path_to_script}", conf.node_binary),
+    }
 }
 
 fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
@@ -217,7 +233,7 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
     let script_path = working_dir.path().join(&conf.script_file_name);
     let script_file = File::create(&script_path)?;
 
-    write!(&script_file, "{}", &conf.build_script())?;
+    write!(&script_file, "{}", conf.build_script())?;
 
     let working_dir_path = working_dir.path().display().to_string();
     for dir in &conf.copy_dirs {
@@ -246,6 +262,9 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
+        // Without this, dropping the child - on a panicking test, an early `?`, or just
+        // forgetting to call `Repl::stop` - leaves Node.js running forever.
+        .kill_on_drop(true)
         .arg("-c")
         .arg(cmd)
         .spawn()?;
@@ -253,6 +272,10 @@ fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
 }
 
 /// Interface to the Node.js REPL. Send code with [`Repl::run`], stop it with [`Repl::stop`].
+///
+/// Dropping this kills the Node.js process, so it never outlives the Rust process that started
+/// it. As a last resort - if the Rust process dies without running destructors - the REPL script
+/// also exits on its own once stdin closes.
 #[derive(Debug)]
 pub struct Repl {
     /// Needs to be held until the working directory should be dropped.
@@ -384,9 +407,36 @@ stderr:\n{stderr}
         self.json_run(format!("outputJson(await {name})")).await
     }
 
-    /// Stop the REPL.
+    /// Stop the REPL. This runs the [`Config::after`] teardown code, waits up to
+    /// [`DEFAULT_STOP_TIMEOUT`] for Node.js to exit, and kills it if it doesn't.
+    ///
+    /// Node.js only exits once its event loop is empty, so code that leaves handles open
+    /// (servers, sockets, timers) would otherwise keep the process alive forever.
     pub async fn stop(&mut self) -> Result<Vec<u8>> {
-        self.run("queue.done();").await
+        let out = self.run("queue.done();").await;
+        // Kill it even when the run above failed - especially then.
+        self.wait_or_kill(DEFAULT_STOP_TIMEOUT).await?;
+        out
+    }
+
+    /// Wait up to `timeout` for Node.js to exit on its own, then kill it.
+    pub async fn wait_or_kill(&mut self, timeout_duration: Duration) -> Result<ExitStatus> {
+        match timeout(timeout_duration, self.child.status()).await {
+            Ok(status) => Ok(status?),
+            Err(_) => {
+                warn!(
+                    "Node.js did not exit within {timeout_duration:?}, killing it. \
+                     Its event loop probably still has open handles."
+                );
+                self.kill().await
+            }
+        }
+    }
+
+    /// Kill Node.js now, and wait for it to be reaped.
+    pub async fn kill(&mut self) -> Result<ExitStatus> {
+        self.child.kill()?;
+        Ok(self.child.status().await?)
     }
 }
 
@@ -518,6 +568,101 @@ output(`${b}`);
         let mut repl: Repl = Config::build()?.start().await?;
         let result = repl.run("output(Buffer.from([0, 255, 128]))").await?;
         assert_eq!(result, vec![0u8, 255, 128]);
+        Ok(())
+    }
+
+    /// `false` when the process is gone, or is a zombie waiting to be reaped.
+    #[cfg(unix)]
+    fn process_is_running(pid: u32) -> bool {
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            // "pid (comm) state ...". `comm` may contain spaces and parens, so scan from the end.
+            return match stat.rsplit_once(") ") {
+                Some((_, rest)) => !rest.starts_with('Z'),
+                None => false,
+            };
+        }
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn assert_process_stops(pid: u32) {
+        for _ in 0..100 {
+            if !process_is_running(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("process {pid} is still running");
+    }
+
+    /// An interval keeps Node's event loop alive forever, so it can never exit on its own.
+    fn config_that_never_exits() -> Result<Config> {
+        Ok(ConfigBuilder::default()
+            .before(vec![
+                "globalThis.timer = setInterval(() => {}, 1000)".to_string(),
+            ])
+            .build()?)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_kills_process_that_will_not_exit() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        let pid = repl.child.id();
+        repl.stop().await?;
+        assert_process_stops(pid);
+        Ok(())
+    }
+
+    /// The stdin watchdog is no help when the JS side won't react to it, so dropping the
+    /// [`Repl`] must kill Node.js outright.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_repl_kills_process_that_ignores_stdin() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        repl.run(
+            "process.stdin.removeAllListeners('end');
+             process.stdin.removeAllListeners('close');
+             output('')",
+        )
+        .await?;
+        let pid = repl.child.id();
+        drop(repl);
+        assert_process_stops(pid);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_repl_kills_process() -> Result<()> {
+        let mut repl = config_that_never_exits()?.start().await?;
+        let pid = repl.child.id();
+        repl.run("output('still here')").await?;
+        drop(repl);
+        assert_process_stops(pid);
+        Ok(())
+    }
+
+    /// Simulates the Rust process dying without cleaning up: Node.js sees EOF on stdin and
+    /// exits itself, even though its event loop would never drain.
+    #[tokio::test]
+    async fn closing_stdin_makes_node_exit() -> Result<()> {
+        let repl = config_that_never_exits()?.start().await?;
+        let Repl {
+            stdin,
+            mut child,
+            dir: _dir,
+            ..
+        } = repl;
+        drop(stdin);
+        let status = timeout(Duration::from_secs(10), child.status())
+            .await
+            .expect("Node.js did not exit after stdin closed")?;
+        assert!(status.success());
         Ok(())
     }
 

@@ -11,7 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Repl::kill` and `Repl::wait_or_kill` for ending the Node.js process directly.
+- `DEFAULT_STOP_TIMEOUT`, the grace period `Repl::stop` gives Node.js to exit on its own.
+
 ### Changed
+
+- The Node.js process is no longer leaked. Previously it kept running whenever the `Repl` was
+  dropped without `stop()` (a panicking test, an early `?`), and even `stop()` left it running
+  forever if the JS event loop still had open handles. Now: the child is spawned with
+  `kill_on_drop`, `stop()` waits `DEFAULT_STOP_TIMEOUT` and then kills, the REPL script exits
+  itself when stdin closes or it gets a `SIGHUP`/`SIGINT`/`SIGTERM`, and the default command
+  `exec`s so the process we hold is Node.js rather than the shell.
 
 ### Removed
 

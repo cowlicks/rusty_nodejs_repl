@@ -89,6 +89,17 @@ async function repl() {
     queue.push(chunk)
   });
 
+  // When the process that started us goes away, our end of the stdin pipe gets
+  // closed. Exit immediately instead of lingering forever on whatever handles
+  // the evaluated code left open in the event loop. Without this we leak
+  // orphaned node processes whenever the parent dies without cleaning up.
+  const exit = () => process.exit(0);
+  process.stdin.on('end', exit);
+  process.stdin.on('close', exit);
+  process.on('SIGHUP', exit);
+  process.on('SIGINT', exit);
+  process.on('SIGTERM', exit);
+
   for await (line of queue) {
     eval(line.toString());
   }
