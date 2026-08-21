@@ -521,6 +521,34 @@ output(`${b}`);
         Ok(())
     }
 
+    /// An interval keeps Node's event loop alive forever, so it can never exit on its own.
+    fn config_that_never_exits() -> Result<Config> {
+        Ok(ConfigBuilder::default()
+            .before(vec![
+                "globalThis.timer = setInterval(() => {}, 1000)".to_string(),
+            ])
+            .build()?)
+    }
+
+    /// Simulates the Rust process dying without cleaning up: Node.js sees EOF on stdin and
+    /// exits itself, even though its event loop would never drain.
+    #[tokio::test]
+    async fn closing_stdin_makes_node_exit() -> Result<()> {
+        let repl = config_that_never_exits()?.start().await?;
+        let Repl {
+            stdin,
+            mut child,
+            dir: _dir,
+            ..
+        } = repl;
+        drop(stdin);
+        let status = timeout(Duration::from_secs(10), child.status())
+            .await
+            .expect("Node.js did not exit after stdin closed")?;
+        assert!(status.success());
+        Ok(())
+    }
+
     #[test]
     fn test_fmt_rs_vec_u8_as_js_buf() {
         assert_eq!(
