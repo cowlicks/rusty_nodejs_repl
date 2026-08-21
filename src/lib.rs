@@ -82,7 +82,9 @@ pub struct Config {
     script_file_name: String,
     /// A function that constructs the shell script which runs the REPL.
     /// It is passed the config, the directory the REPL is run from, and the full path to the `script_file_name` file.
-    /// Result looks like: `NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
+    /// Result looks like: `exec env NODE_PATH=../node_modules /path/to/nodejs_binary /path/to/tmp/repl_script.js`.
+    /// The script is run with `sh -c`, so it should `exec` its final command. Otherwise the process
+    /// we hold is the shell, and killing it would leave Node.js running.
     build_command: Option<Box<BuildCommand>>,
     /// A list paths that will be copied into the [`tempfile::TempDir`] alongside the REPL script.
     /// Useful for importing custom code.
@@ -202,13 +204,12 @@ impl Config {
 }
 
 fn default_build_command(conf: &Config, _working_dir: &str, path_to_script: &str) -> String {
-    let node_env = conf
-        .path_to_node_modules
-        .as_ref()
-        .map(|p| format!("NODE_PATH={p}"))
-        .unwrap_or_default();
-
-    format!("{} {} {path_to_script}", node_env, conf.node_binary)
+    // `exec` so the shell replaces itself with Node.js. Otherwise the pid we hold is the
+    // shell's, and killing it would leave Node.js orphaned.
+    match &conf.path_to_node_modules {
+        Some(p) => format!("exec env NODE_PATH={p} {} {path_to_script}", conf.node_binary),
+        None => format!("exec {} {path_to_script}", conf.node_binary),
+    }
 }
 
 fn run_code(conf: &Config) -> Result<(TempDir, async_process::Child)> {
